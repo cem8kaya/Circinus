@@ -28,6 +28,7 @@ final class GameScene: SKScene {
     private var levelData: LevelData!
     private var tileGrid: [[TileNode]] = []
     private var gridContainer: SKNode!
+    private var gridLinesNode: SKNode?
     private var cols: Int = 0
     private var rows: Int = 0
     private var isSolved: Bool = false
@@ -41,6 +42,27 @@ final class GameScene: SKScene {
 
     private var undoButton: SKNode!
     private var undoStack: [UndoEntry] = []
+    private var hintButton: SKNode!
+    private var hintCountLabel: SKLabelNode!
+    private var hintsRemaining: Int = 3
+
+    // Press-state tracking for tactile feedback
+    private var pressedTile: TileNode?
+    private var pressedRow: Int = -1
+    private var pressedCol: Int = -1
+
+    // Solution rotations from JSON (for hint system & shuffle)
+    private var solutionRotations: [[Int]] = []
+
+    // Win banner reference for animated dismiss
+    private var bannerNode: SKNode?
+    private var dimOverlayNode: SKNode?
+
+    // Confirm restart overlay
+    private var confirmOverlay: SKNode?
+
+    // Node recycling pool: keyed by "\(tileType.rawValue)_\(tileSize)"
+    static var tilePool: [String: [TileNode]] = [:]
 
     private var elapsedTime: TimeInterval = 0
     private var lastUpdateTime: TimeInterval = 0
@@ -63,6 +85,7 @@ final class GameScene: SKScene {
         // Ambient particles
         let particles = BackgroundParticles(sceneSize: size)
         particles.zPosition = 1
+        particles.name = "bgParticles"
         addChild(particles)
 
         setupHUD()
@@ -77,14 +100,41 @@ final class GameScene: SKScene {
         lastUpdateTime = currentTime
     }
 
+    override func didChangeSize(_ oldSize: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        layoutForCurrentSize()
+    }
+
     private func updateTimerDisplay() {
         let mins = Int(elapsedTime) / 60
         let secs = Int(elapsedTime) % 60
         timerLabel?.text = String(format: "%d:%02d", mins, secs)
     }
 
+    // MARK: - HUD Setup
+
     private func setupHUD() {
-        let hudY = size.height - 55
+        layoutHUD()
+    }
+
+    private func layoutHUD() {
+        // Remove old HUD nodes to re-layout
+        for name in ["backButton", "restartButton", "movesIcon", "movesLabel",
+                     "parIcon", "parLabelNode", "timerIcon", "timerLabelNode",
+                     "undoButton", "bestLabelNode", "hintButton"] {
+            childNode(withName: name)?.removeFromParent()
+        }
+        // Also remove detached labels
+        movesLabel?.removeFromParent()
+        parLabel?.removeFromParent()
+        timerLabel?.removeFromParent()
+        bestLabel?.removeFromParent()
+        undoButton?.removeFromParent()
+        hintButton?.removeFromParent()
+        levelLabel?.removeFromParent()
+
+        let isLandscape = size.width > size.height
+        let hudY = size.height - (isLandscape ? 40 : 55)
 
         // Back button (top-left)
         let backBtn = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
@@ -96,6 +146,9 @@ final class GameScene: SKScene {
         backBtn.verticalAlignmentMode = .center
         backBtn.name = "backButton"
         backBtn.zPosition = 90
+        backBtn.accessibilityLabel = "Back to menu"
+        backBtn.isAccessibilityElement = true
+        backBtn.accessibilityTraits = .button
         addChild(backBtn)
 
         // Level name (center top)
@@ -106,6 +159,7 @@ final class GameScene: SKScene {
         levelLabel.verticalAlignmentMode = .center
         levelLabel.position = CGPoint(x: size.width / 2, y: hudY)
         levelLabel.zPosition = 90
+        levelLabel.text = levelData?.name ?? ""
         addChild(levelLabel)
 
         // Restart button (top-right area)
@@ -118,9 +172,12 @@ final class GameScene: SKScene {
         restartBtn.verticalAlignmentMode = .center
         restartBtn.name = "restartButton"
         restartBtn.zPosition = 90
+        restartBtn.accessibilityLabel = "Restart level"
+        restartBtn.isAccessibilityElement = true
+        restartBtn.accessibilityTraits = .button
         addChild(restartBtn)
 
-        // Second row: moves, par, timer, undo
+        // Second row: moves, par, timer, undo, hint
         let row2Y = hudY - 32
 
         // Moves icon + count
@@ -140,7 +197,7 @@ final class GameScene: SKScene {
         movesLabel.verticalAlignmentMode = .top
         movesLabel.position = CGPoint(x: 50, y: row2Y)
         movesLabel.zPosition = 90
-        movesLabel.text = "0"
+        movesLabel.text = "\(moveCount)"
         addChild(movesLabel)
 
         // Par display
@@ -160,6 +217,7 @@ final class GameScene: SKScene {
         parLabel.verticalAlignmentMode = .top
         parLabel.position = CGPoint(x: 120, y: row2Y)
         parLabel.zPosition = 90
+        parLabel.text = par > 0 ? "\(par)" : ""
         addChild(parLabel)
 
         // Timer
@@ -187,7 +245,7 @@ final class GameScene: SKScene {
         undoButton.name = "undoButton"
         undoButton.position = CGPoint(x: size.width - 45, y: row2Y - 4)
         undoButton.zPosition = 90
-        undoButton.alpha = 0.3
+        undoButton.alpha = undoStack.isEmpty ? 0.3 : 1.0
 
         let undoLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
         undoLabel.text = "\u{21A9}"
@@ -207,7 +265,48 @@ final class GameScene: SKScene {
         undoText.name = "undoButton"
         undoButton.addChild(undoText)
 
+        undoButton.accessibilityLabel = "Undo last move"
+        undoButton.isAccessibilityElement = true
+        undoButton.accessibilityTraits = .button
         addChild(undoButton)
+
+        // Hint button (lightbulb icon)
+        hintButton = SKNode()
+        hintButton.name = "hintButton"
+        hintButton.position = CGPoint(x: size.width / 2 + 60, y: row2Y - 4)
+        hintButton.zPosition = 90
+
+        let hintIcon = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        hintIcon.text = "\u{1F4A1}"
+        hintIcon.fontSize = 20
+        hintIcon.horizontalAlignmentMode = .center
+        hintIcon.verticalAlignmentMode = .center
+        hintIcon.name = "hintButton"
+        hintButton.addChild(hintIcon)
+
+        hintCountLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        hintCountLabel.text = "\(hintsRemaining)"
+        hintCountLabel.fontSize = 10
+        hintCountLabel.fontColor = TileNode.colorAccent
+        hintCountLabel.position = CGPoint(x: 14, y: 8)
+        hintCountLabel.horizontalAlignmentMode = .center
+        hintCountLabel.verticalAlignmentMode = .center
+        hintCountLabel.name = "hintButton"
+        hintButton.addChild(hintCountLabel)
+
+        let hintText = SKLabelNode(fontNamed: "AvenirNext-Medium")
+        hintText.text = "Hint"
+        hintText.fontSize = 9
+        hintText.fontColor = UIColor(white: 0.40, alpha: 1)
+        hintText.position = CGPoint(x: 0, y: 14)
+        hintText.horizontalAlignmentMode = .center
+        hintText.name = "hintButton"
+        hintButton.addChild(hintText)
+
+        hintButton.accessibilityLabel = "Use hint, \(hintsRemaining) remaining"
+        hintButton.isAccessibilityElement = true
+        hintButton.accessibilityTraits = .button
+        addChild(hintButton)
 
         // Best score (shown below par after level loads)
         bestLabel = SKLabelNode(fontNamed: "AvenirNext-Regular")
@@ -217,6 +316,10 @@ final class GameScene: SKScene {
         bestLabel.verticalAlignmentMode = .top
         bestLabel.position = CGPoint(x: 120, y: row2Y - 22)
         bestLabel.zPosition = 90
+        if let ld = levelData {
+            let best = LevelProgress.bestMoves(for: ld.id)
+            bestLabel.text = best > 0 ? "Best: \(best)" : ""
+        }
         addChild(bestLabel)
     }
 
@@ -233,6 +336,20 @@ final class GameScene: SKScene {
         self.elapsedTime = 0
         self.lastUpdateTime = 0
         self.timerActive = true
+        self.hintsRemaining = 3
+        self.pressedTile = nil
+        self.bannerNode?.removeFromParent()
+        self.bannerNode = nil
+        self.dimOverlayNode?.removeFromParent()
+        self.dimOverlayNode = nil
+        self.confirmOverlay?.removeFromParent()
+        self.confirmOverlay = nil
+
+        // Store solution rotations from JSON
+        solutionRotations = levelData.tiles.map { row in row.map { $0.rotation } }
+
+        // Recycle previous tiles into pool
+        recycleTiles()
 
         // Clear previous grid
         gridContainer?.removeFromParent()
@@ -242,6 +359,7 @@ final class GameScene: SKScene {
 
         levelLabel?.text = levelData.name
         parLabel?.text = "\(levelData.par)"
+        hintCountLabel?.text = "\(hintsRemaining)"
 
         let best = LevelProgress.bestMoves(for: levelData.id)
         bestLabel?.text = best > 0 ? "Best: \(best)" : ""
@@ -252,6 +370,10 @@ final class GameScene: SKScene {
         let gridOriginX = (size.width - totalW) / 2
         let gridOriginY = (size.height - totalH) / 2 + 20
 
+        // Draw faint grid lines behind tiles
+        drawGridLines(cols: cols, rows: rows, tileSize: tileSize,
+                      originX: gridOriginX, originY: gridOriginY)
+
         tileGrid = []
 
         for row in 0..<rows {
@@ -260,33 +382,61 @@ final class GameScene: SKScene {
                 let td = levelData.tiles[row][col]
                 guard let tileType = TileType(rawValue: td.type) else { continue }
 
-                let tile = TileNode(type: tileType, size: tileSize, initialRotation: td.rotation)
+                let isLocked = td.locked == true
+
+                // Shuffle initial rotations for non-locked tiles
+                let solutionRot = td.rotation
+                let initialRot: Int
+                if isLocked {
+                    initialRot = solutionRot
+                } else {
+                    // Randomize to a rotation different from solution (if possible)
+                    var scrambled = Int.random(in: 0...3)
+                    // For types with rotational symmetry, just pick random
+                    if tileType != .cross {
+                        var attempts = 0
+                        while scrambled == solutionRot && attempts < 10 {
+                            scrambled = Int.random(in: 0...3)
+                            attempts += 1
+                        }
+                    }
+                    initialRot = scrambled
+                }
+
+                // Try to dequeue a recycled tile of the same type and size
+                let tile = dequeueTile(type: tileType, size: tileSize, rotation: initialRot, solutionRotation: solutionRot)
 
                 // SpriteKit Y-up: row 0 (top) maps to high Y
                 let x = gridOriginX + CGFloat(col) * tileSize + tileSize / 2
                 let y = size.height - (gridOriginY + CGFloat(row) * tileSize + tileSize / 2)
                 tile.position = CGPoint(x: x, y: y)
+                tile.solutionRotation = solutionRot
 
                 // Locked tiles
-                if td.locked == true {
+                if isLocked {
                     tile.isUserInteractionEnabled = false
 
-                    let badgeSize = tileSize * 0.10
-                    let badge = SKShapeNode(circleOfRadius: badgeSize)
-                    badge.fillColor = TileNode.colorGold
-                    badge.strokeColor = UIColor(red: 0.85, green: 0.65, blue: 0.10, alpha: 1)
-                    badge.lineWidth = 1
-                    badge.zPosition = 6
-                    badge.position = CGPoint(x: tileSize / 2 - tileSize * 0.18,
-                                             y: tileSize / 2 - tileSize * 0.18)
-                    tile.addChild(badge)
+                    // Only add lock badge if not already present
+                    if tile.childNode(withName: "lockBadge") == nil {
+                        let badgeSize = tileSize * 0.10
+                        let badge = SKShapeNode(circleOfRadius: badgeSize)
+                        badge.fillColor = TileNode.colorGold
+                        badge.strokeColor = UIColor(red: 0.85, green: 0.65, blue: 0.10, alpha: 1)
+                        badge.lineWidth = 1
+                        badge.zPosition = 6
+                        badge.position = CGPoint(x: tileSize / 2 - tileSize * 0.18,
+                                                 y: tileSize / 2 - tileSize * 0.18)
+                        badge.name = "lockBadge"
+                        tile.addChild(badge)
 
-                    // Lock shimmer
-                    let shimmer = SKAction.sequence([
-                        SKAction.fadeAlpha(to: 0.6, duration: 1.2),
-                        SKAction.fadeAlpha(to: 1.0, duration: 1.2)
-                    ])
-                    badge.run(SKAction.repeatForever(shimmer))
+                        let shimmer = SKAction.sequence([
+                            SKAction.fadeAlpha(to: 0.6, duration: 1.2),
+                            SKAction.fadeAlpha(to: 1.0, duration: 1.2)
+                        ])
+                        badge.run(SKAction.repeatForever(shimmer))
+                    }
+                } else {
+                    tile.isUserInteractionEnabled = true
                 }
 
                 gridContainer.addChild(tile)
@@ -296,6 +446,74 @@ final class GameScene: SKScene {
         }
 
         animateGridEntrance()
+    }
+
+    // MARK: - Grid lines
+
+    private func drawGridLines(cols: Int, rows: Int, tileSize: CGFloat,
+                               originX: CGFloat, originY: CGFloat) {
+        gridLinesNode?.removeFromParent()
+        let container = SKNode()
+        container.zPosition = 5
+
+        let lineColor = UIColor(white: 1.0, alpha: 0.03)
+
+        // Vertical lines
+        for col in 0...cols {
+            let x = originX + CGFloat(col) * tileSize
+            let path = CGMutablePath()
+            let yTop = size.height - originY
+            let yBot = size.height - (originY + CGFloat(rows) * tileSize)
+            path.move(to: CGPoint(x: x, y: yTop))
+            path.addLine(to: CGPoint(x: x, y: yBot))
+            let line = SKShapeNode(path: path)
+            line.strokeColor = lineColor
+            line.lineWidth = 0.5
+            container.addChild(line)
+        }
+
+        // Horizontal lines
+        for row in 0...rows {
+            let y = size.height - (originY + CGFloat(row) * tileSize)
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: originX, y: y))
+            path.addLine(to: CGPoint(x: originX + CGFloat(cols) * tileSize, y: y))
+            let line = SKShapeNode(path: path)
+            line.strokeColor = lineColor
+            line.lineWidth = 0.5
+            container.addChild(line)
+        }
+
+        addChild(container)
+        gridLinesNode = container
+    }
+
+    // MARK: - Node recycling
+
+    private func recycleTiles() {
+        for row in tileGrid {
+            for tile in row {
+                tile.removeFromParent()
+                // Remove lock badges for reuse
+                tile.childNode(withName: "lockBadge")?.removeFromParent()
+                let key = "\(tile.tileType.rawValue)_\(Int(tile.tileSize))"
+                GameScene.tilePool[key, default: []].append(tile)
+            }
+        }
+        tileGrid = []
+    }
+
+    private func dequeueTile(type: TileType, size: CGFloat, rotation: Int, solutionRotation: Int) -> TileNode {
+        let key = "\(type.rawValue)_\(Int(size))"
+        if var pool = GameScene.tilePool[key], !pool.isEmpty {
+            let tile = pool.removeLast()
+            GameScene.tilePool[key] = pool
+            tile.resetForRecycling(rotation: rotation, solutionRotation: solutionRotation)
+            return tile
+        }
+        let tile = TileNode(type: type, size: size, initialRotation: rotation)
+        tile.solutionRotation = solutionRotation
+        return tile
     }
 
     // MARK: - Grid entrance animation
@@ -323,40 +541,80 @@ final class GameScene: SKScene {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
 
+        // Dismiss confirm overlay if tapped outside
+        if confirmOverlay != nil {
+            let sceneLoc = touch.location(in: self)
+            let tapped = nodes(at: sceneLoc)
+            for node in tapped {
+                let name = node.name ?? node.parent?.name
+                if name == "confirmYes" {
+                    SoundManager.shared.playButtonTap()
+                    dismissConfirmOverlay()
+                    gameDelegate?.gameSceneDidRequestRestart(self, levelID: levelData.id)
+                    return
+                }
+                if name == "confirmNo" {
+                    SoundManager.shared.playButtonTap()
+                    dismissConfirmOverlay()
+                    return
+                }
+            }
+            dismissConfirmOverlay()
+            return
+        }
+
         // Check HUD buttons first (in scene coords)
         let sceneLoc = touch.location(in: self)
         let tappedNodes = nodes(at: sceneLoc)
         for node in tappedNodes {
             let name = node.name ?? node.parent?.name
             if name == "backButton" {
+                SoundManager.shared.playButtonTap()
                 gameDelegate?.gameSceneDidRequestMenu(self)
                 return
             }
             if name == "restartButton" {
+                SoundManager.shared.playButtonTap()
                 let generator = UIImpactFeedbackGenerator(style: .medium)
                 generator.impactOccurred()
-                gameDelegate?.gameSceneDidRequestRestart(self, levelID: levelData.id)
+                showConfirmRestart()
                 return
             }
             if name == "undoButton" {
                 performUndo()
                 return
             }
+            if name == "hintButton" {
+                performHint()
+                return
+            }
             if name == "nextButton" {
-                gameDelegate?.gameSceneDidRequestNextLevel(self, currentLevelID: levelData.id)
+                SoundManager.shared.playButtonTap()
+                animateBannerDismiss { [weak self] in
+                    guard let self = self else { return }
+                    self.gameDelegate?.gameSceneDidRequestNextLevel(self, currentLevelID: self.levelData.id)
+                }
                 return
             }
             if name == "replayButton" {
-                gameDelegate?.gameSceneDidRequestRestart(self, levelID: levelData.id)
+                SoundManager.shared.playButtonTap()
+                animateBannerDismiss { [weak self] in
+                    guard let self = self else { return }
+                    self.gameDelegate?.gameSceneDidRequestRestart(self, levelID: self.levelData.id)
+                }
                 return
             }
             if name == "menuButton" {
-                gameDelegate?.gameSceneDidRequestMenu(self)
+                SoundManager.shared.playButtonTap()
+                animateBannerDismiss { [weak self] in
+                    guard let self = self else { return }
+                    self.gameDelegate?.gameSceneDidRequestMenu(self)
+                }
                 return
             }
         }
 
-        // Tile interaction
+        // Tile interaction — apply press state
         guard !isSolved else { return }
         let loc = touch.location(in: gridContainer)
 
@@ -367,18 +625,209 @@ final class GameScene: SKScene {
 
                 let tileFrame = tile.calculateAccumulatedFrame()
                 if tileFrame.contains(loc) {
-                    // Record undo before rotation
-                    let prevRot = tile.rotationSteps
-                    undoStack.append(UndoEntry(row: row, col: col, previousRotation: prevRot))
-
-                    tile.rotate { [weak self] in
-                        self?.moveCount += 1
-                        self?.scheduleCompletionCheck()
-                    }
+                    pressedTile = tile
+                    pressedRow = row
+                    pressedCol = col
+                    tile.applyPressState()
                     return
                 }
             }
         }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let tile = pressedTile else { return }
+        tile.releasePressState()
+
+        // Verify touch is still on the same tile
+        if let touch = touches.first {
+            let loc = touch.location(in: gridContainer)
+            let tileFrame = tile.calculateAccumulatedFrame()
+            if tileFrame.contains(loc) {
+                let prevRot = tile.rotationSteps
+                undoStack.append(UndoEntry(row: pressedRow, col: pressedCol, previousRotation: prevRot))
+
+                tile.rotate { [weak self] in
+                    self?.moveCount += 1
+                    self?.scheduleCompletionCheck()
+                }
+            }
+        }
+
+        pressedTile = nil
+        pressedRow = -1
+        pressedCol = -1
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        pressedTile?.releasePressState()
+        pressedTile = nil
+        pressedRow = -1
+        pressedCol = -1
+    }
+
+    // MARK: - Hint system
+
+    private func performHint() {
+        guard !isSolved, hintsRemaining > 0 else {
+            // Shake the hint button to indicate no hints
+            let shake = SKAction.sequence([
+                SKAction.moveBy(x: -4, y: 0, duration: 0.04),
+                SKAction.moveBy(x: 8, y: 0, duration: 0.04),
+                SKAction.moveBy(x: -8, y: 0, duration: 0.04),
+                SKAction.moveBy(x: 4, y: 0, duration: 0.04)
+            ])
+            hintButton.run(shake)
+            return
+        }
+
+        // Find incorrectly rotated, non-locked tiles
+        var candidates: [(Int, Int)] = []
+        for row in 0..<tileGrid.count {
+            for col in 0..<tileGrid[row].count {
+                let tile = tileGrid[row][col]
+                guard tile.isUserInteractionEnabled else { continue }
+                if !tile.isCorrectlyRotated {
+                    candidates.append((row, col))
+                }
+            }
+        }
+
+        guard let (row, col) = candidates.randomElement() else { return }
+
+        SoundManager.shared.playButtonTap()
+        hintsRemaining -= 1
+        hintCountLabel?.text = "\(hintsRemaining)"
+        hintButton.accessibilityLabel = "Use hint, \(hintsRemaining) remaining"
+
+        // Cost: +2 moves
+        moveCount += 2
+
+        // Pulse the tile
+        tileGrid[row][col].showHintPulse()
+
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+    }
+
+    // MARK: - Confirm restart
+
+    private func showConfirmRestart() {
+        guard confirmOverlay == nil else { return }
+
+        let overlay = SKNode()
+        overlay.zPosition = 110
+
+        // Dim background
+        let dim = SKShapeNode(rectOf: CGSize(width: size.width * 2, height: size.height * 2))
+        dim.fillColor = UIColor(white: 0.0, alpha: 0.4)
+        dim.strokeColor = .clear
+        dim.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        dim.name = "confirmNo"
+        overlay.addChild(dim)
+
+        // Card
+        let cardW: CGFloat = 240
+        let cardH: CGFloat = 120
+        let card = SKShapeNode(rectOf: CGSize(width: cardW, height: cardH), cornerRadius: 16)
+        card.fillColor = UIColor(red: 0.10, green: 0.11, blue: 0.15, alpha: 0.98)
+        card.strokeColor = UIColor(white: 0.25, alpha: 1)
+        card.lineWidth = 1.5
+        card.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        overlay.addChild(card)
+
+        let titleLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        titleLabel.text = "Restart level?"
+        titleLabel.fontSize = 18
+        titleLabel.fontColor = .white
+        titleLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 25)
+        titleLabel.horizontalAlignmentMode = .center
+        titleLabel.verticalAlignmentMode = .center
+        overlay.addChild(titleLabel)
+
+        let yesBtn = makeActionButton(text: "Yes", width: 80, height: 34,
+                                       color: TileNode.colorConnected,
+                                       textColor: UIColor(red: 0.06, green: 0.07, blue: 0.11, alpha: 1),
+                                       name: "confirmYes")
+        yesBtn.position = CGPoint(x: size.width / 2 - 50, y: size.height / 2 - 22)
+        overlay.addChild(yesBtn)
+
+        let noBtn = makeActionButton(text: "No", width: 80, height: 34,
+                                      color: UIColor(white: 0.20, alpha: 1),
+                                      textColor: UIColor(white: 0.70, alpha: 1),
+                                      name: "confirmNo")
+        noBtn.position = CGPoint(x: size.width / 2 + 50, y: size.height / 2 - 22)
+        overlay.addChild(noBtn)
+
+        // Animate in
+        overlay.alpha = 0
+        overlay.setScale(0.8)
+        addChild(overlay)
+        overlay.run(SKAction.group([
+            SKAction.fadeIn(withDuration: 0.15),
+            SKAction.scale(to: 1.0, duration: 0.15)
+        ]))
+
+        confirmOverlay = overlay
+    }
+
+    private func dismissConfirmOverlay() {
+        guard let overlay = confirmOverlay else { return }
+        overlay.run(SKAction.group([
+            SKAction.fadeOut(withDuration: 0.1),
+            SKAction.scale(to: 0.8, duration: 0.1)
+        ])) {
+            overlay.removeFromParent()
+        }
+        confirmOverlay = nil
+    }
+
+    // MARK: - Banner dismiss animation
+
+    private func animateBannerDismiss(completion: @escaping () -> Void) {
+        guard let banner = bannerNode else {
+            completion()
+            return
+        }
+        let scaleDown = SKAction.scale(to: 0.3, duration: 0.2)
+        scaleDown.timingMode = .easeIn
+        let fadeOut = SKAction.fadeOut(withDuration: 0.2)
+        banner.run(SKAction.group([scaleDown, fadeOut]))
+        dimOverlayNode?.run(SKAction.fadeOut(withDuration: 0.2))
+
+        run(SKAction.sequence([
+            SKAction.wait(forDuration: 0.2),
+            SKAction.run { completion() }
+        ]))
+    }
+
+    // MARK: - Landscape relayout
+
+    private func layoutForCurrentSize() {
+        // Re-layout HUD
+        layoutHUD()
+
+        // Re-layout grid if loaded
+        guard levelData != nil, !tileGrid.isEmpty else { return }
+
+        let tileSize = CGFloat(levelData.tileSize)
+        let totalW = CGFloat(cols) * tileSize
+        let totalH = CGFloat(rows) * tileSize
+        let gridOriginX = (size.width - totalW) / 2
+        let gridOriginY = (size.height - totalH) / 2 + 20
+
+        for row in 0..<tileGrid.count {
+            for col in 0..<tileGrid[row].count {
+                let tile = tileGrid[row][col]
+                let x = gridOriginX + CGFloat(col) * tileSize + tileSize / 2
+                let y = size.height - (gridOriginY + CGFloat(row) * tileSize + tileSize / 2)
+                tile.position = CGPoint(x: x, y: y)
+            }
+        }
+
+        // Redraw grid lines
+        drawGridLines(cols: cols, rows: rows, tileSize: tileSize,
+                      originX: gridOriginX, originY: gridOriginY)
     }
 
     // MARK: - Undo
@@ -390,6 +839,7 @@ final class GameScene: SKScene {
         tile.setRotation(entry.previousRotation)
         moveCount = max(0, moveCount - 1)
 
+        SoundManager.shared.playUndo()
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
 
@@ -497,7 +947,8 @@ final class GameScene: SKScene {
             }
         ]))
 
-        // 4. Success haptic
+        // 4. Success haptic + sound
+        SoundManager.shared.playWin()
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
     }
@@ -521,6 +972,7 @@ final class GameScene: SKScene {
         overlay.name = "dimOverlay"
         addChild(overlay)
         overlay.run(SKAction.fadeAlpha(to: 1.0, duration: 0.3))
+        dimOverlayNode = overlay
 
         // Card background
         let cardW: CGFloat = 300
@@ -633,6 +1085,7 @@ final class GameScene: SKScene {
         banner.addChild(menuBtn)
 
         addChild(banner)
+        bannerNode = banner
 
         // Animate banner in
         let fadeIn = SKAction.fadeIn(withDuration: 0.3)
