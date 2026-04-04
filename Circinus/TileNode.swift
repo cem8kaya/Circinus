@@ -49,12 +49,14 @@ enum TileType: String, Codable {
 
 final class TileNode: SKNode {
 
-    // MARK: - Colour palette
+    // MARK: - Colour palette (refined premium palette)
 
-    static let colorIdle      = UIColor(red: 0.42, green: 0.48, blue: 0.60, alpha: 1)
-    static let colorConnected = UIColor(red: 0.20, green: 0.82, blue: 0.56, alpha: 1)
-    static let colorBG        = UIColor(white: 0.13, alpha: 1)
-    static let colorBGStroke  = UIColor(white: 0.28, alpha: 1)
+    static let colorIdle      = UIColor(red: 0.38, green: 0.42, blue: 0.56, alpha: 1)
+    static let colorConnected = UIColor(red: 0.16, green: 0.85, blue: 0.58, alpha: 1)
+    static let colorBG        = UIColor(white: 0.11, alpha: 1)
+    static let colorBGStroke  = UIColor(white: 0.22, alpha: 1)
+    static let colorAccent    = UIColor(red: 0.35, green: 0.65, blue: 1.0, alpha: 1)
+    static let colorGold      = UIColor(red: 1.0, green: 0.80, blue: 0.24, alpha: 1)
 
     // MARK: - Properties
 
@@ -64,8 +66,10 @@ final class TileNode: SKNode {
     private var isAnimating: Bool = false
 
     private var bgNode: SKShapeNode!
+    private var shadowNode: SKShapeNode!
     private var highlightOverlay: SKShapeNode!
     private var pipeNodes: [SKNode] = []
+    private var glowNode: SKEffectNode?
 
     var isConnected: Bool = false {
         didSet {
@@ -106,27 +110,44 @@ final class TileNode: SKNode {
     // MARK: - Visual construction
 
     private func buildVisuals() {
-        let pipeW = tileSize * 0.24
+        let pipeW = tileSize * 0.22
         let halfTile = tileSize / 2
+        let cornerR: CGFloat = 10
+
+        // Drop shadow
+        shadowNode = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: cornerR)
+        shadowNode.fillColor = UIColor(white: 0.0, alpha: 0.35)
+        shadowNode.strokeColor = .clear
+        shadowNode.zPosition = -1
+        shadowNode.position = CGPoint(x: 2, y: -2)
+        addChild(shadowNode)
 
         // Background tile
-        bgNode = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: 6)
+        bgNode = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: cornerR)
         bgNode.fillColor = TileNode.colorBG
         bgNode.strokeColor = TileNode.colorBGStroke
-        bgNode.lineWidth = 1.5
+        bgNode.lineWidth = 1.0
         bgNode.zPosition = 0
         addChild(bgNode)
 
+        // Inner subtle gradient border (top highlight for depth)
+        let innerHL = SKShapeNode(rectOf: CGSize(width: tileSize - 7, height: tileSize - 7), cornerRadius: cornerR - 2)
+        innerHL.fillColor = .clear
+        innerHL.strokeColor = UIColor(white: 1.0, alpha: 0.04)
+        innerHL.lineWidth = 1.0
+        innerHL.zPosition = 0.5
+        addChild(innerHL)
+
         // Highlight overlay
-        highlightOverlay = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: 6)
-        highlightOverlay.fillColor = UIColor.white.withAlphaComponent(0.15)
+        highlightOverlay = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: cornerR)
+        highlightOverlay.fillColor = UIColor.white.withAlphaComponent(0.18)
         highlightOverlay.strokeColor = .clear
         highlightOverlay.alpha = 0
         highlightOverlay.zPosition = 5
         addChild(highlightOverlay)
 
-        // Hub circle at centre
-        let hub = SKShapeNode(circleOfRadius: pipeW * 0.65)
+        // Hub circle at centre (slightly larger for premium feel)
+        let hub = SKShapeNode(circleOfRadius: pipeW * 0.72)
         hub.fillColor = TileNode.colorIdle
         hub.strokeColor = .clear
         hub.zPosition = 2
@@ -137,8 +158,8 @@ final class TileNode: SKNode {
         // Arms for each canonical connection
         let armLen = halfTile
         for side in tileType.canonicalConnections {
-            // Arm rectangle
-            let arm = SKShapeNode(rectOf: CGSize(width: pipeW, height: armLen))
+            // Arm rectangle with rounded ends
+            let arm = SKShapeNode(rectOf: CGSize(width: pipeW, height: armLen), cornerRadius: pipeW * 0.15)
             arm.fillColor = TileNode.colorIdle
             arm.strokeColor = .clear
             arm.zPosition = 1
@@ -187,45 +208,58 @@ final class TileNode: SKNode {
         generator.impactOccurred()
 
         // 1. Rotate 90° CW (negative in SpriteKit)
-        let rotAction = SKAction.rotate(byAngle: -.pi / 2, duration: 0.18)
+        let rotAction = SKAction.rotate(byAngle: -.pi / 2, duration: 0.16)
         rotAction.timingMode = .easeInEaseOut
 
-        // 2. Scale bounce on bgNode
-        let bounceDown = SKAction.scale(to: 0.88, duration: 0.06)
-        let bounceUp   = SKAction.scale(to: 1.04, duration: 0.06)
+        // 2. Scale bounce on bgNode (snappy premium feel)
+        let bounceDown = SKAction.scale(to: 0.90, duration: 0.05)
+        let bounceUp   = SKAction.scale(to: 1.05, duration: 0.07)
         let bounceBack = SKAction.scale(to: 1.0, duration: 0.06)
         let bounce = SKAction.sequence([bounceDown, bounceUp, bounceBack])
 
         // 3. White flash on highlight overlay
-        let flashIn  = SKAction.fadeAlpha(to: 1.0, duration: 0.04)
-        let flashOut = SKAction.fadeAlpha(to: 0.0, duration: 0.14)
+        let flashIn  = SKAction.fadeAlpha(to: 0.8, duration: 0.03)
+        let flashOut = SKAction.fadeAlpha(to: 0.0, duration: 0.13)
         let flash = SKAction.sequence([flashIn, flashOut])
 
         // 4. Background pulse
-        let pulseColor = SKAction.customAction(withDuration: 0.18) { [weak self] _, time in
+        let pulseColor = SKAction.customAction(withDuration: 0.16) { [weak self] _, time in
             guard let self = self else { return }
-            let progress = time / 0.18
+            let progress = time / 0.16
             if progress < 0.5 {
-                self.bgNode.fillColor = UIColor(white: 0.18, alpha: 1)
+                self.bgNode.fillColor = UIColor(white: 0.16, alpha: 1)
             } else {
                 self.bgNode.fillColor = TileNode.colorBG
             }
         }
+
+        // 5. Shadow squish during rotation
+        let shadowSquish = SKAction.sequence([
+            SKAction.moveTo(y: -1, duration: 0.05),
+            SKAction.moveTo(y: -2, duration: 0.11)
+        ])
 
         // Run all together
         self.run(rotAction)
         bgNode.run(bounce)
         highlightOverlay.run(flash)
         bgNode.run(pulseColor)
+        shadowNode.run(shadowSquish)
 
         // Completion after rotation finishes
         self.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.18),
+            SKAction.wait(forDuration: 0.16),
             SKAction.run { [weak self] in
                 self?.isAnimating = false
                 completion?()
             }
         ]))
+    }
+
+    /// Set rotation directly without animation (for undo)
+    func setRotation(_ steps: Int) {
+        rotationSteps = steps % 4
+        self.zRotation = -CGFloat(rotationSteps) * .pi / 2
     }
 
     // MARK: - Connection animation
@@ -235,10 +269,10 @@ final class TileNode: SKNode {
 
         // Staggered colour sweep
         for (index, node) in pipeNodes.enumerated() {
-            let delay = Double(index) * 0.015
+            let delay = Double(index) * 0.02
             node.run(SKAction.sequence([
                 SKAction.wait(forDuration: delay),
-                SKAction.customAction(withDuration: 0.2) { node, _ in
+                SKAction.customAction(withDuration: 0.22) { node, elapsed in
                     if let shape = node as? SKShapeNode {
                         shape.fillColor = targetColor
                     }
@@ -249,21 +283,35 @@ final class TileNode: SKNode {
         // Glow ring on connection
         if isConnected {
             let glowSize = tileSize - 3
-            let glow = SKShapeNode(rectOf: CGSize(width: glowSize, height: glowSize), cornerRadius: 6)
+            let glow = SKShapeNode(rectOf: CGSize(width: glowSize, height: glowSize), cornerRadius: 10)
             glow.fillColor = .clear
-            glow.strokeColor = TileNode.colorConnected.withAlphaComponent(0.6)
-            glow.lineWidth = 2.5
+            glow.strokeColor = TileNode.colorConnected.withAlphaComponent(0.5)
+            glow.lineWidth = 3.0
             glow.zPosition = 4
             glow.setScale(1.0)
-            glow.alpha = 0.8
+            glow.alpha = 0.9
             addChild(glow)
 
-            let expand = SKAction.scale(to: 1.3, duration: 0.3)
+            let expand = SKAction.scale(to: 1.35, duration: 0.35)
             expand.timingMode = .easeOut
-            let fadeOut = SKAction.fadeOut(withDuration: 0.3)
+            let fadeOut = SKAction.fadeOut(withDuration: 0.35)
             glow.run(SKAction.group([expand, fadeOut])) {
                 glow.removeFromParent()
             }
+
+            // Tile bg stroke glow
+            let strokeAnim = SKAction.customAction(withDuration: 0.4) { [weak self] _, elapsed in
+                guard let self = self else { return }
+                let progress = elapsed / 0.4
+                if progress < 0.5 {
+                    self.bgNode.strokeColor = TileNode.colorConnected.withAlphaComponent(0.6)
+                } else {
+                    self.bgNode.strokeColor = TileNode.colorBGStroke
+                }
+            }
+            bgNode.run(strokeAnim)
+        } else {
+            bgNode.strokeColor = TileNode.colorBGStroke
         }
     }
 }

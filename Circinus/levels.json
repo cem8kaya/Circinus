@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "levels": [
     {
       "id": 1,
@@ -160,6 +160,216 @@
           { "type": "tee",      "rotation": 1, "locked": false },
           { "type": "straight", "rotation": 1, "locked": false },
           { "type": "corner",   "rotation": 0, "locked": false }
+        ]
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Spiral",
+      "gridCols": 4,
+      "gridRows": 4,
+      "tileSize": 82,
+      "par": 12,
+      "tiles": [
+        [
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "straight", "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 2, "locked": false },
+          { "type": "corner",   "rotation": 2, "locked": true  },
+          { "type": "corner",   "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": true  },
+          { "type": "straight", "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 3, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false }
+        ]
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Crossroads",
+      "gridCols": 5,
+      "gridRows": 5,
+      "tileSize": 68,
+      "par": 16,
+      "tiles": [
+        [
+          { "type": "end",      "rotation": 3, "locked": false },
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false },
+          { "type": "end",      "rotation": 1, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": true  },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "end",      "rotation": 2, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false },
+          { "type": "end",      "rotation": 0, "locked": false }
+        ]
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Labyrinth",
+      "gridCols": 7,
+      "gridRows": 7,
+      "tileSize": 50,
+      "par": 32,
+      "tiles": [
+        [
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": true  },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false }
+        ]
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Grand Circuit",
+      "gridCols": 6,
+      "gridRows": 6,
+      "tileSize": 58,
+      "par": 22,
+      "tiles": [
+        [
+          { "type": "corner",   "rotation": 2, "locked": true  },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": true  }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 1, "locked": true  },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": true  }
         ]
       ]
     }
