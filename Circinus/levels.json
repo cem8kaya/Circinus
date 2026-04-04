@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "levels": [
+    {
+      "id": 1,
+      "name": "Starter Loop",
+      "gridCols": 3,
+      "gridRows": 3,
+      "tileSize": 95,
+      "par": 6,
+      "tiles": [
+        [
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": true  },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false }
+        ]
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Junction City",
+      "gridCols": 4,
+      "gridRows": 4,
+      "tileSize": 82,
+      "par": 10,
+      "tiles": [
+        [
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false }
+        ]
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Nexus",
+      "gridCols": 5,
+      "gridRows": 5,
+      "tileSize": 68,
+      "par": 18,
+      "tiles": [
+        [
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "straight", "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": true  },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false }
+        ]
+      ]
+    },
+    {
+      "id": 4,
+      "name": "The Maze",
+      "gridCols": 6,
+      "gridRows": 6,
+      "tileSize": 58,
+      "par": 26,
+      "tiles": [
+        [
+          { "type": "corner",   "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 3, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 3, "locked": false },
+          { "type": "cross",    "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "straight", "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 2, "locked": false },
+          { "type": "cross",    "rotation": 0, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false },
+          { "type": "straight", "rotation": 0, "locked": false }
+        ],
+        [
+          { "type": "tee",      "rotation": 0, "locked": false },
+          { "type": "cross",    "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 3, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "cross",    "rotation": 2, "locked": false },
+          { "type": "tee",      "rotation": 2, "locked": false }
+        ],
+        [
+          { "type": "corner",   "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "tee",      "rotation": 1, "locked": false },
+          { "type": "straight", "rotation": 1, "locked": false },
+          { "type": "corner",   "rotation": 0, "locked": false }
+        ]
+      ]
+    }
+  ]
+}
