@@ -63,6 +63,77 @@ enum TileType: String, Codable {
     }
 }
 
+// MARK: - EnergyColor
+//
+// Directional energy is tagged with a colour. `.none` represents either an
+// un-energised pipe (before the solver has propagated flow into it) or a
+// structural-only tile that can carry any colour transparently.
+//
+// Mixing follows simple subtractive-style rules: red ⊕ blue = purple.
+// Purple is an absorbing state — once a path is saturated, it stays purple.
+
+enum EnergyColor: String, Codable {
+    case none
+    case red
+    case blue
+    case purple
+
+    /// Combine two flows meeting at a node (a Mixer, or an accidental
+    /// collision at a non-mixer tile — the latter will be flagged as a
+    /// short-circuit by the solver).
+    static func mix(_ a: EnergyColor, _ b: EnergyColor) -> EnergyColor {
+        switch (a, b) {
+        case (.none, let x), (let x, .none):   return x
+        case let (x, y) where x == y:          return x
+        case (.red, .blue), (.blue, .red):     return .purple
+        default:                               return .purple  // saturated
+        }
+    }
+
+    /// Design note: these hues are intentionally high-saturation so colour-
+    /// blind players can still distinguish purple from red/blue by value.
+    var uiColor: UIColor {
+        switch self {
+        case .none:   return TileNode.colorIdle
+        case .red:    return UIColor(red: 0.95, green: 0.28, blue: 0.35, alpha: 1)
+        case .blue:   return UIColor(red: 0.30, green: 0.58, blue: 1.00, alpha: 1)
+        case .purple: return UIColor(red: 0.74, green: 0.32, blue: 0.92, alpha: 1)
+        }
+    }
+}
+
+// MARK: - TileRole
+//
+// Role is orthogonal to geometry (TileType). Any geometry can be fragile,
+// any geometry can be quantum-linked, etc. The four new mechanics plug in
+// here so level authors can compose them freely.
+
+enum TileRole: Equatable {
+    /// Plain connective tile — the legacy behaviour.
+    case normal
+
+    /// Emits `color` energy out of `side` (canonical, i.e. at rotation 0).
+    /// Sources are typically authored as locked `.end` tiles.
+    case source(side: ConnectionSide, color: EnergyColor)
+
+    /// Consumes energy and requires `required` colour to arrive at `side`.
+    /// Sinks are the win-condition terminals (replaces "single closed loop"
+    /// as the goal when any sources are present).
+    case sink(side: ConnectionSide, required: EnergyColor)
+
+    /// A 4-way junction that combines all inbound coloured flows and re-
+    /// emits their mix on every other face. Geometrically must be `.cross`.
+    case mixer
+
+    /// Breaks (becomes non-conducting + visually shattered) after being
+    /// rotated more than `limit` times. Forces pre-planning over spinning.
+    case fragile(limit: Int)
+
+    var isMixer: Bool  { if case .mixer  = self { return true } else { return false } }
+    var isSource: Bool { if case .source = self { return true } else { return false } }
+    var isSink: Bool   { if case .sink   = self { return true } else { return false } }
+}
+
 // MARK: - TileNode
 
 final class TileNode: SKNode {
@@ -92,6 +163,41 @@ final class TileNode: SKNode {
     /// The rotation that solves the puzzle (from JSON).
     var solutionRotation: Int = 0
 
+    // MARK: New mechanic state (design doc §1–§4)
+
+    /// Role determines directional / colour / fragility behaviour.
+    /// Defaults to `.normal` so legacy levels keep working unchanged.
+    var role: TileRole = .normal
+
+    /// Opaque tag. Any two tiles sharing a non-nil quantumGroup rotate
+    /// together (mechanic §3). Set via level JSON, resolved by GameScene.
+    var quantumGroup: String? = nil
+
+    /// Monotonic count of player-initiated rotations this level.
+    /// Consulted by the fragile-tile mechanic (§4) and displayed as a
+    /// "cracks" meter on fragile tiles.
+    private(set) var rotationCount: Int = 0
+
+    /// A broken tile is non-conducting: the solver treats it as if it had
+    /// no active connections. Visually shown with a cracked overlay.
+    var isBroken: Bool = false {
+        didSet {
+            guard isBroken != oldValue else { return }
+            if isBroken { animateBreak() }
+            updateAccessibilityInfo()
+        }
+    }
+
+    /// Colour currently flowing through this tile, assigned by the solver
+    /// on each evaluation pass. Drives pipe tint so the player can read
+    /// the live circuit state at a glance.
+    var currentEnergy: EnergyColor = .none {
+        didSet {
+            guard currentEnergy != oldValue else { return }
+            applyEnergyTint(animated: true)
+        }
+    }
+
     var isLocked: Bool = false {
         didSet {
             updateAccessibilityInfo()
@@ -103,6 +209,34 @@ final class TileNode: SKNode {
             guard isConnected != oldValue else { return }
             animateConnectionChange()
             updateAccessibilityInfo()
+        }
+    }
+
+    // MARK: Derived mechanic queries
+
+    /// Rotation budget remaining before this fragile tile shatters.
+    /// `nil` means the tile is not fragile.
+    var rotationsRemaining: Int? {
+        if case .fragile(let limit) = role {
+            return max(0, limit - rotationCount)
+        }
+        return nil
+    }
+
+    /// Connections this tile actually participates in after accounting for
+    /// its role. Broken tiles conduct nothing; sources/sinks only expose
+    /// their single declared face. This is what the solver must consult,
+    /// not the raw `activeConnections`.
+    var effectiveConnections: Set<ConnectionSide> {
+        if isBroken { return [] }
+        switch role {
+        case .source(let side, _), .sink(let side, _):
+            // Apply current rotation to the canonical side.
+            var s = side
+            for _ in 0..<(rotationSteps % 4) { s = s.rotatedCW }
+            return [s]
+        case .normal, .mixer, .fragile:
+            return activeConnections
         }
     }
 
@@ -241,8 +375,16 @@ final class TileNode: SKNode {
 
     func rotate(completion: (() -> Void)? = nil) {
         guard !isAnimating else { return }
+        // Broken / locked tiles are rotation-inert.
+        guard !isBroken, !isLocked else { completion?(); return }
+
+        // §4 Overload: fragile tiles refuse rotations past their limit —
+        // the *attempted* rotation is what shatters them. Design choice:
+        // we let the attempt happen and then break on the way out, so the
+        // player sees the move they just made was the fatal one.
         isAnimating = true
         rotationSteps = (rotationSteps + 1) % 4
+        rotationCount += 1
 
         // Haptic feedback
         let generator = UIImpactFeedbackGenerator(style: .light)
@@ -296,11 +438,107 @@ final class TileNode: SKNode {
         self.run(SKAction.sequence([
             SKAction.wait(forDuration: 0.16),
             SKAction.run { [weak self] in
-                self?.isAnimating = false
-                self?.updateAccessibilityInfo()
+                guard let self = self else { return }
+                self.isAnimating = false
+
+                // §4 Overload evaluation: if we have blown the budget,
+                // break the tile now. Setting isBroken triggers the
+                // shatter animation via didSet.
+                if case .fragile(let limit) = self.role, self.rotationCount > limit {
+                    self.isBroken = true
+                }
+
+                self.updateAccessibilityInfo()
                 completion?()
             }
         ]))
+    }
+
+    // MARK: - New mechanic visuals & helpers
+
+    /// Tint every pipe segment to reflect the current energy colour.
+    /// Called by the didSet on `currentEnergy` whenever the solver
+    /// re-evaluates the board.
+    private func applyEnergyTint(animated: Bool) {
+        guard !isBroken else { return }
+        let target = currentEnergy == .none
+            ? (isConnected ? TileNode.colorConnected : TileNode.colorIdle)
+            : currentEnergy.uiColor
+
+        for node in pipeNodes {
+            guard let shape = node as? SKShapeNode else { continue }
+            if animated {
+                let from = shape.fillColor
+                shape.run(SKAction.customAction(withDuration: 0.22) { n, elapsed in
+                    guard let s = n as? SKShapeNode else { return }
+                    s.fillColor = from.lerp(to: target, t: CGFloat(elapsed / 0.22))
+                })
+            } else {
+                shape.fillColor = target
+            }
+        }
+    }
+
+    /// Shatter feedback for fragile tiles that exceeded their rotation
+    /// budget. Pipes dim, a crack overlay appears, haptic thumps, and the
+    /// tile stops accepting input (guarded by `isBroken` in `rotate`).
+    private func animateBreak() {
+        SoundManager.shared.playRotate()  // reuse until a dedicated SFX ships
+        let heavy = UIImpactFeedbackGenerator(style: .heavy)
+        heavy.impactOccurred()
+
+        // Dim pipes to a muted grey.
+        let dead = UIColor(white: 0.28, alpha: 1)
+        for node in pipeNodes {
+            if let shape = node as? SKShapeNode {
+                shape.run(SKAction.customAction(withDuration: 0.25) { n, t in
+                    guard let s = n as? SKShapeNode else { return }
+                    s.fillColor = (s.fillColor).lerp(to: dead, t: CGFloat(t / 0.25))
+                })
+            }
+        }
+
+        // Crack overlay — simple two-stroke X that reads well at small sizes.
+        let crack = SKShapeNode()
+        let path = CGMutablePath()
+        let h = tileSize * 0.4
+        path.move(to: CGPoint(x: -h, y: -h * 0.4))
+        path.addLine(to: CGPoint(x: h * 0.2, y: h * 0.1))
+        path.addLine(to: CGPoint(x: -h * 0.1, y: h * 0.4))
+        path.move(to: CGPoint(x: h * 0.4, y: -h))
+        path.addLine(to: CGPoint(x: -h * 0.1, y: -h * 0.1))
+        path.addLine(to: CGPoint(x: h * 0.3, y: h * 0.3))
+        crack.path = path
+        crack.strokeColor = UIColor(white: 0.92, alpha: 0.9)
+        crack.lineWidth = 2.2
+        crack.zPosition = 6
+        crack.alpha = 0
+        crack.name = "crackOverlay"
+        addChild(crack)
+        crack.run(SKAction.fadeAlpha(to: 0.85, duration: 0.18))
+
+        // One-shot jolt.
+        run(SKAction.sequence([
+            SKAction.rotate(byAngle: 0.08, duration: 0.04),
+            SKAction.rotate(byAngle: -0.16, duration: 0.06),
+            SKAction.rotate(byAngle: 0.08, duration: 0.04)
+        ]))
+    }
+
+    /// §3 Quantum link: rotate every tile in `group` as a single atomic
+    /// action. Called by GameScene when the player taps any member of the
+    /// group. Exposed as a static utility so the scene doesn't need to
+    /// know how individual TileNodes animate.
+    static func rotateQuantumGroup(_ group: [TileNode], completion: (() -> Void)? = nil) {
+        guard !group.isEmpty else { completion?(); return }
+        // Gate on the "slowest" member so callers get one completion.
+        var remaining = group.count
+        for t in group {
+            t.rotate {
+                remaining -= 1
+                if remaining == 0 { completion?() }
+            }
+        }
     }
 
     /// Set rotation directly without animation (for undo)
@@ -432,6 +670,14 @@ final class TileNode: SKNode {
         alpha = 1
         setScale(1)
         isLocked = false
+
+        // Reset new mechanic state (§1–§4).
+        role = .normal
+        quantumGroup = nil
+        rotationCount = 0
+        isBroken = false
+        currentEnergy = .none
+        childNode(withName: "crackOverlay")?.removeFromParent()
 
         for node in pipeNodes {
             if let shape = node as? SKShapeNode {
