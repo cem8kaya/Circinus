@@ -46,6 +46,13 @@ final class GameScene: SKScene {
     private var hintCountLabel: SKLabelNode!
     private var hintsRemaining: Int = 3
 
+    // Premium hint spotlight (shown when hint is used)
+    private var hintSpotlightNode: SKNode?
+    private var hintedTile: TileNode?
+
+    // First-play tutorial overlay
+    private var tutorialOverlay: TutorialOverlay?
+
     // Press-state tracking for tactile feedback
     private var pressedTile: TileNode?
     private var pressedRow: Int = -1
@@ -446,6 +453,29 @@ final class GameScene: SKScene {
         }
 
         animateGridEntrance()
+
+        // Show premium tutorial the first time Level 1 is played
+        if levelData.id == 1 && !UserDefaults.standard.bool(forKey: "tutorialCompleted") {
+            showTutorial()
+        }
+    }
+
+    // MARK: - First-play tutorial
+
+    private func showTutorial() {
+        tutorialOverlay?.removeFromParent()
+        let overlay = TutorialOverlay(sceneSize: size)
+        overlay.alpha = 0
+        overlay.onDismiss = { [weak self] in
+            self?.tutorialOverlay = nil
+        }
+        addChild(overlay)
+        tutorialOverlay = overlay
+        // Delay so the grid entrance animation plays first
+        overlay.run(SKAction.sequence([
+            SKAction.wait(forDuration: 0.55),
+            SKAction.fadeIn(withDuration: 0.30)
+        ]))
     }
 
     // MARK: - Grid lines
@@ -541,6 +571,12 @@ final class GameScene: SKScene {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
 
+        // Tutorial intercepts all input while visible
+        if let tutorial = tutorialOverlay {
+            _ = tutorial.handleTap(at: touch.location(in: self), in: self)
+            return
+        }
+
         // Dismiss confirm overlay if tapped outside
         if confirmOverlay != nil {
             let sceneLoc = touch.location(in: self)
@@ -569,6 +605,7 @@ final class GameScene: SKScene {
         for node in tappedNodes {
             let name = node.name ?? node.parent?.name
             if name == "backButton" {
+                dismissHintSpotlight()
                 SoundManager.shared.playButtonTap()
                 gameDelegate?.gameSceneDidRequestMenu(self)
                 return
@@ -647,6 +684,7 @@ final class GameScene: SKScene {
                 let prevRot = tile.rotationSteps
                 undoStack.append(UndoEntry(row: pressedRow, col: pressedCol, previousRotation: prevRot))
 
+                dismissHintSpotlight()
                 tile.rotate { [weak self] in
                     self?.moveCount += 1
                     self?.scheduleCompletionCheck()
@@ -669,15 +707,18 @@ final class GameScene: SKScene {
     // MARK: - Hint system
 
     private func performHint() {
-        guard !isSolved, hintsRemaining > 0 else {
-            // Shake the hint button to indicate no hints
+        guard !isSolved else { return }
+
+        guard hintsRemaining > 0 else {
+            // Shake + toast when hints are exhausted
             let shake = SKAction.sequence([
-                SKAction.moveBy(x: -4, y: 0, duration: 0.04),
-                SKAction.moveBy(x: 8, y: 0, duration: 0.04),
-                SKAction.moveBy(x: -8, y: 0, duration: 0.04),
-                SKAction.moveBy(x: 4, y: 0, duration: 0.04)
+                SKAction.moveBy(x: -5, y: 0, duration: 0.04),
+                SKAction.moveBy(x: 10, y: 0, duration: 0.04),
+                SKAction.moveBy(x: -10, y: 0, duration: 0.04),
+                SKAction.moveBy(x: 5, y: 0, duration: 0.04)
             ])
             hintButton.run(shake)
+            showToast("No hints remaining")
             return
         }
 
@@ -695,19 +736,211 @@ final class GameScene: SKScene {
 
         guard let (row, col) = candidates.randomElement() else { return }
 
-        SoundManager.shared.playButtonTap()
         hintsRemaining -= 1
         hintCountLabel?.text = "\(hintsRemaining)"
         hintButton.accessibilityLabel = "Use hint, \(hintsRemaining) remaining"
+        moveCount += 2  // Cost: +2 moves penalty
 
-        // Cost: +2 moves
-        moveCount += 2
+        SoundManager.shared.playButtonTap()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // Pulse the tile
-        tileGrid[row][col].showHintPulse()
+        showPremiumHintSpotlight(row: row, col: col)
+    }
 
-        let generator = UIImpactFeedbackGenerator(style: .light)
-        generator.impactOccurred()
+    // MARK: - Premium hint spotlight
+
+    private func showPremiumHintSpotlight(row: Int, col: Int) {
+        // Dismiss any existing spotlight first
+        dismissHintSpotlight()
+
+        let tile = tileGrid[row][col]
+        let tileSize = tile.tileSize
+
+        // Convert tile position (gridContainer space) → scene space
+        let worldPos = convert(tile.position, from: gridContainer)
+
+        // Elevate the hinted tile above the dim overlay
+        tile.zPosition = 145   // gridContainer.zPosition(10) + 145 = 155, above overlay at 150
+        hintedTile = tile
+
+        let container = SKNode()
+        container.zPosition = 150
+        addChild(container)
+        hintSpotlightNode = container
+
+        // --- 1. Full-scene dim overlay ---
+        let dim = SKShapeNode(rectOf: CGSize(width: size.width + 200, height: size.height + 200))
+        dim.fillColor = UIColor(white: 0.0, alpha: 0.68)
+        dim.strokeColor = .clear
+        dim.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        dim.zPosition = 0
+        container.addChild(dim)
+
+        // --- 2. Expanding pulse ring (wide atmospheric glow) ---
+        let pulseRing = SKShapeNode(circleOfRadius: tileSize * 0.72)
+        pulseRing.fillColor = TileNode.colorAccent.withAlphaComponent(0.10)
+        pulseRing.strokeColor = TileNode.colorAccent.withAlphaComponent(0.55)
+        pulseRing.lineWidth = 2
+        pulseRing.position = worldPos
+        pulseRing.zPosition = 1
+        container.addChild(pulseRing)
+
+        pulseRing.run(SKAction.repeatForever(SKAction.sequence([
+            SKAction.group([
+                SKAction.scale(to: 1.6, duration: 0.75),
+                SKAction.fadeAlpha(to: 0.15, duration: 0.75)
+            ]),
+            SKAction.run {
+                pulseRing.setScale(1.0)
+                pulseRing.alpha = 0.8
+            }
+        ])))
+
+        // --- 3. Steady inner highlight border around the tile ---
+        let highlight = SKShapeNode(rectOf: CGSize(width: tileSize + 10, height: tileSize + 10),
+                                    cornerRadius: 13)
+        highlight.fillColor = TileNode.colorAccent.withAlphaComponent(0.08)
+        highlight.strokeColor = TileNode.colorAccent
+        highlight.lineWidth = 2.5
+        highlight.position = worldPos
+        highlight.zPosition = 2
+        container.addChild(highlight)
+
+        highlight.run(SKAction.repeatForever(SKAction.sequence([
+            SKAction.fadeAlpha(to: 1.0, duration: 0.38),
+            SKAction.fadeAlpha(to: 0.45, duration: 0.38)
+        ])))
+
+        // --- 4. "Rotate this tile" label ---
+        let instructionLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+        instructionLabel.text = "Rotate this tile"
+        instructionLabel.fontSize = 14
+        instructionLabel.fontColor = .white
+        instructionLabel.horizontalAlignmentMode = .center
+        instructionLabel.verticalAlignmentMode = .center
+        instructionLabel.zPosition = 3
+
+        // Keep label inside the screen vertically
+        let labelY = worldPos.y + tileSize / 2 + 44
+        let clampedLabelY = min(labelY, size.height - 50)
+        instructionLabel.position = CGPoint(x: worldPos.x, y: clampedLabelY)
+        container.addChild(instructionLabel)
+
+        // --- 5. Rotation count badge ---
+        let needed = (tile.solutionRotation - tile.rotationSteps + 4) % 4
+        if needed > 0 {
+            let tapText = needed == 1 ? "1 tap to solve" : "\(needed) taps to solve"
+            let badgeLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+            badgeLabel.text = tapText
+            badgeLabel.fontSize = 12
+            badgeLabel.fontColor = TileNode.colorAccent
+            badgeLabel.horizontalAlignmentMode = .center
+            badgeLabel.verticalAlignmentMode = .center
+
+            let badgeW: CGFloat = CGFloat(tapText.count) * 7.5 + 20
+            let badgeBg = SKShapeNode(rectOf: CGSize(width: badgeW, height: 22), cornerRadius: 11)
+            badgeBg.fillColor = UIColor(red: 0.07, green: 0.08, blue: 0.13, alpha: 0.96)
+            badgeBg.strokeColor = TileNode.colorAccent.withAlphaComponent(0.45)
+            badgeBg.lineWidth = 1
+
+            let badgeY = clampedLabelY - 20
+            badgeBg.position = CGPoint(x: worldPos.x, y: badgeY)
+            badgeBg.zPosition = 3
+            container.addChild(badgeBg)
+
+            badgeLabel.position = CGPoint(x: worldPos.x, y: badgeY)
+            badgeLabel.zPosition = 4
+            container.addChild(badgeLabel)
+        }
+
+        // --- 6. Tap indicator (animated downward arrow) ---
+        let arrowLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        arrowLabel.text = "▼"
+        arrowLabel.fontSize = 16
+        arrowLabel.fontColor = TileNode.colorAccent.withAlphaComponent(0.85)
+        arrowLabel.horizontalAlignmentMode = .center
+        arrowLabel.verticalAlignmentMode = .center
+
+        let arrowY = worldPos.y + tileSize / 2 + 8
+        arrowLabel.position = CGPoint(x: worldPos.x, y: arrowY)
+        arrowLabel.zPosition = 3
+        container.addChild(arrowLabel)
+
+        arrowLabel.run(SKAction.repeatForever(SKAction.sequence([
+            SKAction.moveBy(x: 0, y: -6, duration: 0.45),
+            SKAction.moveBy(x: 0, y: 6, duration: 0.45)
+        ])))
+
+        // --- 7. Hints remaining badge (bottom of screen) ---
+        if hintsRemaining > 0 {
+            let remainingLabel = SKLabelNode(fontNamed: "AvenirNext-Regular")
+            remainingLabel.text = "\(hintsRemaining) hint\(hintsRemaining == 1 ? "" : "s") remaining"
+            remainingLabel.fontSize = 12
+            remainingLabel.fontColor = UIColor(white: 0.50, alpha: 1)
+            remainingLabel.horizontalAlignmentMode = .center
+            remainingLabel.verticalAlignmentMode = .center
+            remainingLabel.position = CGPoint(x: size.width / 2, y: 42)
+            remainingLabel.zPosition = 3
+            container.addChild(remainingLabel)
+        }
+
+        // --- 8. Fade in + auto-dismiss after 3.5 s ---
+        container.alpha = 0
+        container.run(SKAction.fadeAlpha(to: 1.0, duration: 0.22))
+
+        container.run(SKAction.sequence([
+            SKAction.wait(forDuration: 3.5),
+            SKAction.fadeOut(withDuration: 0.28),
+            SKAction.removeFromParent()
+        ])) { [weak self] in
+            guard let self = self else { return }
+            self.hintedTile?.zPosition = 0
+            self.hintedTile = nil
+            if self.hintSpotlightNode === container {
+                self.hintSpotlightNode = nil
+            }
+        }
+    }
+
+    private func dismissHintSpotlight() {
+        hintedTile?.zPosition = 0
+        hintedTile = nil
+        hintSpotlightNode?.removeFromParent()
+        hintSpotlightNode = nil
+    }
+
+    // MARK: - Toast notification
+
+    private func showToast(_ message: String) {
+        let toast = SKNode()
+        toast.position = CGPoint(x: size.width / 2, y: 80)
+        toast.zPosition = 160
+
+        let label = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+        label.text = message
+        label.fontSize = 13
+        label.fontColor = .white
+        label.horizontalAlignmentMode = .center
+        label.verticalAlignmentMode = .center
+
+        let pillW: CGFloat = max(140, CGFloat(message.count) * 7.8 + 28)
+        let pill = SKShapeNode(rectOf: CGSize(width: pillW, height: 34), cornerRadius: 17)
+        pill.fillColor = UIColor(white: 0.14, alpha: 0.96)
+        pill.strokeColor = UIColor(white: 0.32, alpha: 1)
+        pill.lineWidth = 1
+
+        toast.addChild(pill)
+        toast.addChild(label)
+        addChild(toast)
+
+        toast.run(SKAction.sequence([
+            SKAction.wait(forDuration: 1.6),
+            SKAction.group([
+                SKAction.fadeOut(withDuration: 0.35),
+                SKAction.moveBy(x: 0, y: 8, duration: 0.35)
+            ]),
+            SKAction.removeFromParent()
+        ]))
     }
 
     // MARK: - Confirm restart
