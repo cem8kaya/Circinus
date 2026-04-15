@@ -414,7 +414,7 @@ final class GameScene: SKScene {
 
                 // Locked tiles
                 if isLocked {
-                    tile.isUserInteractionEnabled = false
+                    tile.isLocked = true
 
                     // Only add lock badge if not already present
                     if tile.childNode(withName: "lockBadge") == nil {
@@ -436,7 +436,7 @@ final class GameScene: SKScene {
                         badge.run(SKAction.repeatForever(shimmer))
                     }
                 } else {
-                    tile.isUserInteractionEnabled = true
+                    tile.isLocked = false
                 }
 
                 gridContainer.addChild(tile)
@@ -621,7 +621,7 @@ final class GameScene: SKScene {
         for row in 0..<tileGrid.count {
             for col in 0..<tileGrid[row].count {
                 let tile = tileGrid[row][col]
-                guard tile.isUserInteractionEnabled else { continue }
+                guard !tile.isLocked else { continue }
 
                 let tileFrame = tile.calculateAccumulatedFrame()
                 if tileFrame.contains(loc) {
@@ -686,7 +686,7 @@ final class GameScene: SKScene {
         for row in 0..<tileGrid.count {
             for col in 0..<tileGrid[row].count {
                 let tile = tileGrid[row][col]
-                guard tile.isUserInteractionEnabled else { continue }
+                guard !tile.isLocked else { continue }
                 if !tile.isCorrectlyRotated {
                     candidates.append((row, col))
                 }

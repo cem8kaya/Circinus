@@ -216,7 +216,7 @@ final class MenuScene: SKScene {
             for (fx, fy, tileType) in demoPositions {
                 let tile = TileNode(type: tileType, size: 48, initialRotation: Int.random(in: 0...3))
                 tile.position = CGPoint(x: size.width * fx, y: size.height * fy)
-                tile.isUserInteractionEnabled = false
+                tile.isLocked = true
                 tile.zPosition = 10
                 addChild(tile)
 

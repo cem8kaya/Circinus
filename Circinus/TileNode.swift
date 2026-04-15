@@ -92,6 +92,12 @@ final class TileNode: SKNode {
     /// The rotation that solves the puzzle (from JSON).
     var solutionRotation: Int = 0
 
+    var isLocked: Bool = false {
+        didSet {
+            updateAccessibilityInfo()
+        }
+    }
+
     var isConnected: Bool = false {
         didSet {
             guard isConnected != oldValue else { return }
@@ -127,7 +133,8 @@ final class TileNode: SKNode {
         super.init()
 
         self.rotationSteps = initialRotation % 4
-        self.isUserInteractionEnabled = true
+        self.isUserInteractionEnabled = false
+        self.isLocked = false
 
         buildVisuals()
 
@@ -410,7 +417,7 @@ final class TileNode: SKNode {
         accessibilityTraits = .button
         let connState = isConnected ? "connected" : "not connected"
         accessibilityLabel = "\(tileType.rawValue) tile, rotation \(rotationSteps) of 4, \(connState)"
-        accessibilityHint = isUserInteractionEnabled ? "Double tap to rotate" : "Locked tile"
+        accessibilityHint = !isLocked ? "Double tap to rotate" : "Locked tile"
     }
 
     // MARK: - Node recycling
@@ -424,6 +431,7 @@ final class TileNode: SKNode {
         zRotation = -CGFloat(rotationSteps) * .pi / 2
         alpha = 1
         setScale(1)
+        isLocked = false
 
         for node in pipeNodes {
             if let shape = node as? SKShapeNode {
