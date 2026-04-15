@@ -17,76 +17,241 @@ struct GridCoord: Hashable {
 }
 
 // MARK: - SolveResult
+//
+// Extended to surface the state each new mechanic needs:
+//   * `energy`           — the colour the solver believes is flowing in
+//                          each tile; GameScene uses this to paint pipes.
+//   * `satisfiedSinks`   — sinks receiving the correct colour.
+//   * `unsatisfiedSinks` — sinks that are dark, leaking, or wrong-coloured.
+//   * `brokenTiles`      — tiles shattered by the Overload mechanic (§4).
+//   * `shortedTiles`     — non-mixer tiles where two different colours
+//                          collided, which is an explicit fail state the
+//                          UI flags in red.
 
 struct SolveResult {
     let isSolved: Bool
     let connectedTiles: Set<GridCoord>
     let leakyTiles: Set<GridCoord>
+    let energy: [GridCoord: EnergyColor]
+    let satisfiedSinks: Set<GridCoord>
+    let unsatisfiedSinks: Set<GridCoord>
+    let brokenTiles: Set<GridCoord>
+    let shortedTiles: Set<GridCoord>
 }
 
 // MARK: - PuzzleSolver
+//
+// The solver now runs three passes:
+//
+//   Pass 1 — Topology.  Build a set of valid adjacency edges: two tiles
+//            are edge-linked iff they are in-bounds, neither is broken,
+//            and they both expose the connecting face via
+//            `effectiveConnections`. Tiles with any dangling face are
+//            marked leaky (legacy behaviour).
+//
+//   Pass 2 — Flow.     Fixed-point colour propagation. Seed every source
+//            with its colour, then relax along the adjacency graph.
+//            Mixers combine every incoming colour and re-emit the result.
+//            Non-mixer collisions between different colours flag a short.
+//
+//   Pass 3 — Goal.     If the level defines any sinks, the win condition
+//            is "every sink receives its required colour and no leaks or
+//            shorts remain." If it defines none, fall back to the legacy
+//            single-closed-loop rule for full backward compatibility.
 
 final class PuzzleSolver {
 
     static func solve(grid: [[TileNode]], cols: Int, rows: Int) -> SolveResult {
-        // Pass 1: Leak detection
-        var leaky = Set<GridCoord>()
-        var paired = Set<GridCoord>()
+
+        // ------------------------------------------------------------------
+        // Pass 1: topology + leak detection
+        // ------------------------------------------------------------------
+        var leaky   = Set<GridCoord>()
+        var paired  = Set<GridCoord>()
+        var broken  = Set<GridCoord>()
+        var sources = [(GridCoord, EnergyColor)]()
+        var sinks   = [(GridCoord, ConnectionSide, EnergyColor)]()
 
         for row in 0..<rows {
             for col in 0..<cols {
                 let coord = GridCoord(col: col, row: row)
-                let tile = grid[row][col]
+                let tile  = grid[row][col]
+
+                if tile.isBroken {
+                    broken.insert(coord)
+                    // Broken tiles have no effective connections, so any
+                    // neighbour pointing at them will itself become leaky
+                    // on its own iteration. Skip the per-side check here.
+                    continue
+                }
+
                 var tileIsLeaky = false
-
-                for side in tile.activeConnections {
-                    let nCoord = coord.neighbour(in: side)
-
-                    // Check bounds
-                    guard nCoord.col >= 0, nCoord.col < cols,
-                          nCoord.row >= 0, nCoord.row < rows else {
-                        tileIsLeaky = true
-                        continue
+                for side in tile.effectiveConnections {
+                    let n = coord.neighbour(in: side)
+                    guard n.col >= 0, n.col < cols, n.row >= 0, n.row < rows else {
+                        tileIsLeaky = true; continue
                     }
-
-                    // Check reciprocal connection
-                    let neighbour = grid[nCoord.row][nCoord.col]
-                    if !neighbour.activeConnections.contains(side.opposite) {
+                    let nTile = grid[n.row][n.col]
+                    if nTile.isBroken || !nTile.effectiveConnections.contains(side.opposite) {
                         tileIsLeaky = true
                     }
                 }
+                if tileIsLeaky { leaky.insert(coord) } else { paired.insert(coord) }
 
-                if tileIsLeaky {
-                    leaky.insert(coord)
-                } else {
-                    paired.insert(coord)
+                switch tile.role {
+                case .source(_, let c):         sources.append((coord, c))
+                case .sink(let s, let req):     sinks.append((coord, s, req))
+                default: break
                 }
             }
         }
 
-        // Pass 2: Connectivity BFS
-        guard let start = paired.first else {
-            return SolveResult(isSolved: false, connectedTiles: [], leakyTiles: leaky)
-        }
+        // ------------------------------------------------------------------
+        // Pass 2: directed colour propagation (§1, §2)
+        // ------------------------------------------------------------------
+        //
+        // We use a worklist fixed-point: seed sources, then relax across
+        // the paired adjacency graph. A non-mixer tile carries exactly one
+        // colour; if a second distinct colour arrives, it is a short.
+        // Mixers accumulate inputs and re-emit mix(all).
+        //
+        // Complexity: O((V + E) · C) where C is the number of distinct
+        // colour states (≤ 4). On typical 8×8 boards this is trivial.
 
-        var visited = Set<GridCoord>()
-        var queue = [start]
-        visited.insert(start)
+        var energy  = [GridCoord: EnergyColor]()
+        var shorted = Set<GridCoord>()
 
-        while !queue.isEmpty {
-            let current = queue.removeFirst()
-            let tile = grid[current.row][current.col]
+        // Seed sources (they are their own first energy state).
+        for (coord, colour) in sources { energy[coord] = colour }
 
-            for side in tile.activeConnections {
-                let next = current.neighbour(in: side)
-                if paired.contains(next), !visited.contains(next) {
-                    visited.insert(next)
-                    queue.append(next)
+        var changed = true
+        while changed {
+            changed = false
+
+            for coord in paired {
+                guard let outgoing = energy[coord] else { continue }
+                let tile = grid[coord.row][coord.col]
+
+                // Mixers do not forward on the same pass — their output is
+                // produced separately below from the union of inputs.
+                if tile.role.isMixer { continue }
+
+                for side in tile.effectiveConnections {
+                    let n = coord.neighbour(in: side)
+                    guard paired.contains(n) else { continue }
+                    let nTile = grid[n.row][n.col]
+                    // Must be a reciprocated edge.
+                    guard nTile.effectiveConnections.contains(side.opposite) else { continue }
+
+                    if nTile.role.isMixer {
+                        // Accumulate into the mixer; mixers are handled
+                        // explicitly in the mixer pass below.
+                        let combined = EnergyColor.mix(energy[n] ?? .none, outgoing)
+                        if energy[n] != combined {
+                            energy[n] = combined
+                            changed = true
+                        }
+                    } else {
+                        if let existing = energy[n] {
+                            if existing != outgoing {
+                                // Two different colours meeting on a plain
+                                // wire = explicit short. Player must fix.
+                                if shorted.insert(n).inserted { changed = true }
+                            }
+                        } else {
+                            energy[n] = outgoing
+                            changed = true
+                        }
+                    }
+                }
+            }
+
+            // Mixer re-emit pass. A mixer's "outgoing" colour is simply its
+            // current accumulated energy — because we defined mix(c, .none)
+            // = c and mix is associative/commutative, propagating the
+            // mixer's energy[coord] on its faces achieves the spec.
+            for coord in paired {
+                let tile = grid[coord.row][coord.col]
+                guard tile.role.isMixer, let out = energy[coord], out != .none else { continue }
+                for side in tile.effectiveConnections {
+                    let n = coord.neighbour(in: side)
+                    guard paired.contains(n) else { continue }
+                    let nTile = grid[n.row][n.col]
+                    guard nTile.effectiveConnections.contains(side.opposite) else { continue }
+
+                    if nTile.role.isMixer {
+                        let combined = EnergyColor.mix(energy[n] ?? .none, out)
+                        if energy[n] != combined { energy[n] = combined; changed = true }
+                    } else {
+                        if let existing = energy[n] {
+                            if existing != out, shorted.insert(n).inserted { changed = true }
+                        } else {
+                            energy[n] = out
+                            changed = true
+                        }
+                    }
                 }
             }
         }
 
-        let isSolved = leaky.isEmpty && visited.count == cols * rows
-        return SolveResult(isSolved: isSolved, connectedTiles: visited, leakyTiles: leaky)
+        // Also consider "connected" as the union of all tiles reachable
+        // from any source. Legacy levels with no sources fall back to
+        // BFS-from-first-paired, preserving the old "one loop" semantics.
+        var connected = Set<GridCoord>()
+        if !sources.isEmpty {
+            connected = Set(energy.keys).intersection(paired)
+        } else if let start = paired.first {
+            var queue = [start]; connected.insert(start)
+            while !queue.isEmpty {
+                let c = queue.removeFirst()
+                let tile = grid[c.row][c.col]
+                for side in tile.effectiveConnections {
+                    let n = c.neighbour(in: side)
+                    if paired.contains(n), !connected.contains(n) {
+                        connected.insert(n); queue.append(n)
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Pass 3: goal evaluation
+        // ------------------------------------------------------------------
+        var satisfied   = Set<GridCoord>()
+        var unsatisfied = Set<GridCoord>()
+
+        for (coord, _, required) in sinks {
+            // A sink is satisfied iff it is paired (no leak), not shorted,
+            // and the colour arriving at it matches `required`.
+            if !paired.contains(coord) || shorted.contains(coord) {
+                unsatisfied.insert(coord); continue
+            }
+            if (energy[coord] ?? .none) == required {
+                satisfied.insert(coord)
+            } else {
+                unsatisfied.insert(coord)
+            }
+        }
+
+        let solved: Bool = {
+            guard leaky.isEmpty, shorted.isEmpty else { return false }
+            if sinks.isEmpty {
+                // Legacy rule: every tile on a single connected loop.
+                return connected.count == cols * rows - broken.count
+            }
+            // New rule: all sinks satisfied.
+            return unsatisfied.isEmpty && !sinks.isEmpty
+        }()
+
+        return SolveResult(
+            isSolved: solved,
+            connectedTiles: connected,
+            leakyTiles: leaky,
+            energy: energy,
+            satisfiedSinks: satisfied,
+            unsatisfiedSinks: unsatisfied,
+            brokenTiles: broken,
+            shortedTiles: shorted
+        )
     }
 }
