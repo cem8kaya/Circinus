@@ -6,6 +6,50 @@ struct TileData: Codable {
     let type: String
     let rotation: Int
     let locked: Bool?
+
+    // §1–§5: optional mechanic fields — absent = no special behaviour.
+    // Defaults to nil so existing memberwise callers (e.g. fallbackLevels())
+    // don't need to pass these arguments, and old JSON without these keys
+    // decodes cleanly (Codable treats absent optional keys as nil).
+    //
+    // role encoding:
+    //   "diode"               → TileRole.diode
+    //   "mixer"               → TileRole.mixer
+    //   "fragile"             → TileRole.fragile(limit: fragileLimit ?? 3)
+    //   "source:right:red"    → TileRole.source(side: .right, color: .red)
+    //   "sink:left:blue"      → TileRole.sink(side: .left, required: .blue)
+    let role: String?         = nil
+    let quantumGroup: String? = nil     // §3 — co-rotation tag
+    let fragileLimit: Int?    = nil     // §4 — companion to role = "fragile"
+
+    /// Parsed `TileRole` value.  Returns `.normal` for any unknown/absent role
+    /// so old levels and hand-edited JSON degrade gracefully.
+    var parsedRole: TileRole {
+        guard let r = role else { return .normal }
+        switch r {
+        case "diode":  return .diode
+        case "mixer":  return .mixer
+        case "fragile":
+            return .fragile(limit: fragileLimit ?? 3)
+        default:
+            // Compound roles: "source:side:color" or "sink:side:required"
+            let parts = r.split(separator: ":").map(String.init)
+            guard parts.count == 3,
+                  let side = ConnectionSide(rawValue: parts[1]) else { return .normal }
+            switch parts[0] {
+            case "source":
+                if let color = EnergyColor(rawValue: parts[2]) {
+                    return .source(side: side, color: color)
+                }
+            case "sink":
+                if let req = EnergyColor(rawValue: parts[2]) {
+                    return .sink(side: side, required: req)
+                }
+            default: break
+            }
+            return .normal
+        }
+    }
 }
 
 struct LevelData: Codable {
