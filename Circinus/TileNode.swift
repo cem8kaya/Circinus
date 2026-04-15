@@ -129,9 +129,22 @@ enum TileRole: Equatable {
     /// rotated more than `limit` times. Forces pre-planning over spinning.
     case fragile(limit: Int)
 
+    /// §5 Diode: conducts energy in one direction only.
+    /// Canonical in-face = .bottom, out-face = .top (flows upward at rotation
+    /// 0). After N CW rotations both faces rotate accordingly. Topology sees
+    /// both faces normally (so neighbours aren't flagged leaky); the solver's
+    /// flow pass enforces the one-way constraint.
+    ///
+    /// Decision forced: the player must orient the diode so current flows
+    /// *through* it — a topologically valid but backwards diode leaves the
+    /// downstream sink dark. The always-visible arrow overlay makes the
+    /// direction unambiguous even before the player taps.
+    case diode
+
     var isMixer: Bool  { if case .mixer  = self { return true } else { return false } }
     var isSource: Bool { if case .source = self { return true } else { return false } }
     var isSink: Bool   { if case .sink   = self { return true } else { return false } }
+    var isDiode: Bool  { if case .diode  = self { return true } else { return false } }
 }
 
 // MARK: - TileNode
@@ -167,7 +180,9 @@ final class TileNode: SKNode {
 
     /// Role determines directional / colour / fragility behaviour.
     /// Defaults to `.normal` so legacy levels keep working unchanged.
-    var role: TileRole = .normal
+    var role: TileRole = .normal {
+        didSet { updateRoleVisuals() }
+    }
 
     /// Opaque tag. Any two tiles sharing a non-nil quantumGroup rotate
     /// together (mechanic §3). Set via level JSON, resolved by GameScene.
@@ -223,6 +238,19 @@ final class TileNode: SKNode {
         return nil
     }
 
+    /// §5 Diode: in/out faces in world-space for the current rotationSteps.
+    /// Canonical: inFace = .bottom, outFace = .top (flows "upward" at rot 0).
+    /// Only meaningful when role == .diode; safe to call on any tile.
+    var diodeFaces: (inFace: ConnectionSide, outFace: ConnectionSide) {
+        var inf:  ConnectionSide = .bottom
+        var outf: ConnectionSide = .top
+        for _ in 0..<(rotationSteps % 4) {
+            inf  = inf.rotatedCW
+            outf = outf.rotatedCW
+        }
+        return (inFace: inf, outFace: outf)
+    }
+
     /// Connections this tile actually participates in after accounting for
     /// its role. Broken tiles conduct nothing; sources/sinks only expose
     /// their single declared face. This is what the solver must consult,
@@ -235,7 +263,10 @@ final class TileNode: SKNode {
             var s = side
             for _ in 0..<(rotationSteps % 4) { s = s.rotatedCW }
             return [s]
-        case .normal, .mixer, .fragile:
+        case .normal, .mixer, .fragile, .diode:
+            // §5 Diode: exposes both geometric faces for topology so neither
+            // neighbour is flagged leaky. Directionality is a flow property
+            // enforced by PuzzleSolver Pass 2, not a topology property.
             return activeConnections
         }
     }
@@ -479,6 +510,63 @@ final class TileNode: SKNode {
         }
     }
 
+    /// §5 Diode: refresh role-specific overlays after a role assignment.
+    /// Called by the `role.didSet` observer. Safe to call multiple times —
+    /// always removes the previous overlay before re-adding.
+    private func updateRoleVisuals() {
+        // Always clear the previous diode arrow so a recycled tile doesn't
+        // carry stale visuals when its role is reset to .normal.
+        childNode(withName: "diodeArrow")?.removeFromParent()
+
+        if role.isDiode {
+            addChild(buildDiodeArrow())
+        }
+    }
+
+    /// §5 Diode: a semi-transparent arrowhead drawn in *local* space pointing
+    /// from canonical in-face (.bottom) toward out-face (.top). Because the
+    /// tile rotates as a whole via `zRotation`, this single upward arrow
+    /// always displays the live flow direction without needing updates on
+    /// each rotation. The arrow is always visible (not just when energised)
+    /// so the player can read the diode direction on a dark/unconnected tile.
+    private func buildDiodeArrow() -> SKNode {
+        let container = SKNode()
+        container.name = "diodeArrow"
+        container.zPosition = 3     // above pipe arms (z 1–2), below highlight (z 5)
+
+        let sz = tileSize
+        // Proportional sizing: comfortably readable at the smallest tile size
+        // used in levels.json (50pt) and not oversized at 95pt.
+        let headH:  CGFloat = sz * 0.22
+        let headW:  CGFloat = sz * 0.16
+        let stemH:  CGFloat = sz * 0.10
+        let stemW:  CGFloat = sz * 0.06
+        // Shift the whole arrow up slightly so the stem base clears the hub.
+        let offsetY: CGFloat = sz * 0.04
+
+        // Arrowhead triangle: apex up, base below.
+        let headPath = CGMutablePath()
+        headPath.move(to:     CGPoint(x: 0,          y: offsetY + stemH + headH))
+        headPath.addLine(to:  CGPoint(x: -headW / 2, y: offsetY + stemH))
+        headPath.addLine(to:  CGPoint(x:  headW / 2, y: offsetY + stemH))
+        headPath.closeSubpath()
+
+        let head = SKShapeNode(path: headPath)
+        head.fillColor   = UIColor(white: 1.0, alpha: 0.72)
+        head.strokeColor = .clear
+        container.addChild(head)
+
+        // Stem below the arrowhead.
+        let stem = SKShapeNode(rectOf: CGSize(width: stemW, height: stemH),
+                               cornerRadius: stemW * 0.3)
+        stem.fillColor   = UIColor(white: 1.0, alpha: 0.72)
+        stem.strokeColor = .clear
+        stem.position    = CGPoint(x: 0, y: offsetY + stemH / 2)
+        container.addChild(stem)
+
+        return container
+    }
+
     /// Shatter feedback for fragile tiles that exceeded their rotation
     /// budget. Pipes dim, a crack overlay appears, haptic thumps, and the
     /// tile stops accepting input (guarded by `isBroken` in `rotate`).
@@ -671,7 +759,10 @@ final class TileNode: SKNode {
         setScale(1)
         isLocked = false
 
-        // Reset new mechanic state (§1–§4).
+        // Reset new mechanic state (§1–§5).
+        // Note: setting role = .normal triggers updateRoleVisuals() via didSet,
+        // which removes the diode arrow. crackOverlay is separate (added by
+        // animateBreak, not role-driven) so it needs its own explicit removal.
         role = .normal
         quantumGroup = nil
         rotationCount = 0

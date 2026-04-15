@@ -136,12 +136,26 @@ final class PuzzleSolver {
                 // produced separately below from the union of inputs.
                 if tile.role.isMixer { continue }
 
+                // §5 Diode: pre-compute this tile's out-face once per coord
+                // so we don't repeat the rotation math for every side below.
+                let sourceDiodeFaces = tile.role.isDiode ? tile.diodeFaces : nil
+
                 for side in tile.effectiveConnections {
+                    // §5 Diode: a diode may only emit energy on its outFace.
+                    // Energy cannot exit backward through the inFace.
+                    if let df = sourceDiodeFaces, side != df.outFace { continue }
+
                     let n = coord.neighbour(in: side)
                     guard paired.contains(n) else { continue }
                     let nTile = grid[n.row][n.col]
                     // Must be a reciprocated edge.
                     guard nTile.effectiveConnections.contains(side.opposite) else { continue }
+
+                    // §5 Diode: energy may only *enter* a diode at its inFace.
+                    // Arriving at the outFace (backwards) silently drops the
+                    // flow — the pipe goes dark rather than flagging a short,
+                    // because the diode is topologically valid; it just blocks.
+                    if nTile.role.isDiode && side.opposite != nTile.diodeFaces.inFace { continue }
 
                     if nTile.role.isMixer {
                         // Accumulate into the mixer; mixers are handled
@@ -178,6 +192,9 @@ final class PuzzleSolver {
                     guard paired.contains(n) else { continue }
                     let nTile = grid[n.row][n.col]
                     guard nTile.effectiveConnections.contains(side.opposite) else { continue }
+
+                    // §5 Diode: mixer output obeys the same inFace rule.
+                    if nTile.role.isDiode && side.opposite != nTile.diodeFaces.inFace { continue }
 
                     if nTile.role.isMixer {
                         let combined = EnergyColor.mix(energy[n] ?? .none, out)

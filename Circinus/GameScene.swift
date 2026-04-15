@@ -17,6 +17,9 @@ private struct UndoEntry {
     let row: Int
     let col: Int
     let previousRotation: Int
+    /// §3 Quantum: entries sharing the same undoGroupID are reversed together
+    /// as a single undo action. Plain moves get a unique UUID per tap.
+    let undoGroupID: String
 }
 
 // MARK: - GameScene
@@ -419,6 +422,12 @@ final class GameScene: SKScene {
                 tile.position = CGPoint(x: x, y: y)
                 tile.solutionRotation = solutionRot
 
+                // §1–§5: apply role and quantum group from JSON.
+                // role.didSet triggers updateRoleVisuals() so the diode
+                // arrow (and future role overlays) appear immediately.
+                tile.role         = td.parsedRole
+                tile.quantumGroup = td.quantumGroup
+
                 // Locked tiles
                 if isLocked {
                     tile.isLocked = true
@@ -681,13 +690,39 @@ final class GameScene: SKScene {
             let loc = touch.location(in: gridContainer)
             let tileFrame = tile.calculateAccumulatedFrame()
             if tileFrame.contains(loc) {
-                let prevRot = tile.rotationSteps
-                undoStack.append(UndoEntry(row: pressedRow, col: pressedCol, previousRotation: prevRot))
-
                 dismissHintSpotlight()
-                tile.rotate { [weak self] in
-                    self?.moveCount += 1
-                    self?.scheduleCompletionCheck()
+
+                if let group = tile.quantumGroup {
+                    // §3 Quantum: rotate every tile in the group atomically.
+                    // All entries share one undoGroupID so performUndo reverses
+                    // the whole group in a single undo tap.
+                    let undoID = UUID().uuidString
+                    var groupTiles: [(tile: TileNode, row: Int, col: Int)] = []
+                    for r in 0..<tileGrid.count {
+                        for c in 0..<tileGrid[r].count {
+                            if tileGrid[r][c].quantumGroup == group {
+                                groupTiles.append((tileGrid[r][c], r, c))
+                            }
+                        }
+                    }
+                    for member in groupTiles {
+                        undoStack.append(UndoEntry(row: member.row, col: member.col,
+                                                   previousRotation: member.tile.rotationSteps,
+                                                   undoGroupID: undoID))
+                    }
+                    TileNode.rotateQuantumGroup(groupTiles.map { $0.tile }) { [weak self] in
+                        self?.moveCount += 1
+                        self?.scheduleCompletionCheck()
+                    }
+                } else {
+                    let prevRot = tile.rotationSteps
+                    undoStack.append(UndoEntry(row: pressedRow, col: pressedCol,
+                                               previousRotation: prevRot,
+                                               undoGroupID: UUID().uuidString))
+                    tile.rotate { [weak self] in
+                        self?.moveCount += 1
+                        self?.scheduleCompletionCheck()
+                    }
                 }
             }
         }
@@ -1068,10 +1103,17 @@ final class GameScene: SKScene {
     private func performUndo() {
         guard !isSolved, let entry = undoStack.popLast() else { return }
 
-        let tile = tileGrid[entry.row][entry.col]
-        tile.setRotation(entry.previousRotation)
-        moveCount = max(0, moveCount - 1)
+        // Apply first entry.
+        tileGrid[entry.row][entry.col].setRotation(entry.previousRotation)
 
+        // §3 Quantum: pop the rest of the group atomically (they share the
+        // same undoGroupID pushed by the quantum-group dispatch in touchesEnded).
+        while let next = undoStack.last, next.undoGroupID == entry.undoGroupID {
+            undoStack.removeLast()
+            tileGrid[next.row][next.col].setRotation(next.previousRotation)
+        }
+
+        moveCount = max(0, moveCount - 1)
         SoundManager.shared.playUndo()
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()

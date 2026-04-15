@@ -373,5 +373,39 @@
         ]
       ]
     }
+    ,
+    {
+      "id": 9,
+      "name": "One-Way Street",
+      "gridCols": 4,
+      "gridRows": 1,
+      "tileSize": 90,
+      "par": 3,
+      "tiles": [
+        [
+          { "type": "end",      "rotation": 0, "locked": true,  "role": "source:right:red" },
+          { "type": "straight", "rotation": 1, "locked": false, "role": "diode"             },
+          { "type": "straight", "rotation": 1, "locked": false, "role": "diode"             },
+          { "type": "end",      "rotation": 0, "locked": true,  "role": "sink:left:red"     }
+        ]
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Checkpoint",
+      "gridCols": 5,
+      "gridRows": 1,
+      "tileSize": 82,
+      "par": 4,
+      "tiles": [
+        [
+          { "type": "end",      "rotation": 0, "locked": true,  "role": "source:right:red" },
+          { "type": "straight", "rotation": 1, "locked": false, "role": "diode"             },
+          { "type": "straight", "rotation": 1, "locked": false                              },
+          { "type": "straight", "rotation": 1, "locked": false, "role": "diode"             },
+          { "type": "end",      "rotation": 0, "locked": true,  "role": "sink:left:red"     }
+        ]
+      ]
+    }
   ]
 }
