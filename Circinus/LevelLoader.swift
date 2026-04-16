@@ -7,7 +7,7 @@ struct TileData: Codable {
     let rotation: Int
     let locked: Bool?
 
-    // §1–§5: optional mechanic fields — absent = no special behaviour.
+    // §1–§6: optional mechanic fields — absent = no special behaviour.
     // Defaults to nil so existing memberwise callers (e.g. fallbackLevels())
     // don't need to pass these arguments, and old JSON without these keys
     // decodes cleanly (Codable treats absent optional keys as nil).
@@ -18,6 +18,8 @@ struct TileData: Codable {
     //   "fragile"             → TileRole.fragile(limit: fragileLimit ?? 3)
     //   "source:right:red"    → TileRole.source(side: .right, color: .red)
     //   "sink:left:blue"      → TileRole.sink(side: .left, required: .blue)
+    //   "superposed:0:2"      → TileRole.superposed(stateA:0, stateB:2,
+    //                                               collapsed:false, pickedB:false)
     let role: String?         = nil
     let quantumGroup: String? = nil     // §3 — co-rotation tag
     let fragileLimit: Int?    = nil     // §4 — companion to role = "fragile"
@@ -32,8 +34,16 @@ struct TileData: Codable {
         case "fragile":
             return .fragile(limit: fragileLimit ?? 3)
         default:
-            // Compound roles: "source:side:color" or "sink:side:required"
             let parts = r.split(separator: ":").map(String.init)
+            guard parts.count >= 2 else { return .normal }
+
+            // §6 Superposition: "superposed:A:B"
+            if parts[0] == "superposed", parts.count == 3,
+               let a = Int(parts[1]), let b = Int(parts[2]) {
+                return .superposed(stateA: a, stateB: b, collapsed: false, pickedB: false)
+            }
+
+            // Compound roles: "source:side:color" or "sink:side:required"
             guard parts.count == 3,
                   let side = ConnectionSide(rawValue: parts[1]) else { return .normal }
             switch parts[0] {

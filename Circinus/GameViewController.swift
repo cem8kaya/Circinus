@@ -397,7 +397,7 @@ final class LevelSelectScene: SKScene {
         // Level grid
         let cols = isLandscape ? 3 : 2
         let cardW: CGFloat = isLandscape ? 160 : 140
-        let cardH: CGFloat = 140
+        let cardH: CGFloat = 158    // extra height for dual-star indicator rows
         let spacingX: CGFloat = 20
         let spacingY: CGFloat = 18
         let totalW = CGFloat(cols) * cardW + CGFloat(cols - 1) * spacingX
@@ -413,9 +413,11 @@ final class LevelSelectScene: SKScene {
             let unlocked = LevelProgress.isUnlocked(levelID: level.id)
             let stars = LevelProgress.stars(for: level.id)
             let best = LevelProgress.bestMoves(for: level.id)
+            let choreo = LevelProgress.bestChoreography(levelID: level.id)
 
             let card = buildLevelCard(level: level, unlocked: unlocked, stars: stars,
-                                       bestMoves: best, cardSize: CGSize(width: cardW, height: cardH))
+                                       bestMoves: best, cardSize: CGSize(width: cardW, height: cardH),
+                                       choreoStars: choreo.stars)
             card.position = CGPoint(x: x, y: y)
             card.zPosition = 10
             card.name = "level_\(level.id)"
@@ -454,7 +456,8 @@ final class LevelSelectScene: SKScene {
     }
 
     private func buildLevelCard(level: LevelData, unlocked: Bool, stars: Int,
-                                 bestMoves: Int, cardSize: CGSize) -> SKNode {
+                                 bestMoves: Int, cardSize: CGSize,
+                                 choreoStars: Int = 0) -> SKNode {
         let node = SKNode()
         node.name = "level_\(level.id)"
 
@@ -507,37 +510,66 @@ final class LevelSelectScene: SKScene {
             dimLabel.name = "level_\(level.id)"
             node.addChild(dimLabel)
 
-            // Stars
-            let starStr: String
-            switch stars {
-            case 3:  starStr = "\u{2605}\u{2605}\u{2605}"
-            case 2:  starStr = "\u{2605}\u{2605}\u{2606}"
-            case 1:  starStr = "\u{2605}\u{2606}\u{2606}"
-            default: starStr = "\u{2606}\u{2606}\u{2606}"
+            // Move stars (gold) — top row of dual indicator
+            func starString(count: Int) -> String {
+                (0..<3).map { $0 < count ? "\u{2605}" : "\u{2606}" }.joined()
             }
-            let starLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
-            starLabel.text = starStr
-            starLabel.fontSize = 18
-            starLabel.fontColor = stars > 0 ? TileNode.colorGold : UIColor(white: 0.30, alpha: 1)
-            starLabel.position = CGPoint(x: 0, y: -32)
-            starLabel.verticalAlignmentMode = .center
-            starLabel.name = "level_\(level.id)"
-            node.addChild(starLabel)
 
-            // Best moves
+            let moveStarLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+            moveStarLabel.text = starString(count: stars)
+            moveStarLabel.fontSize = 15
+            moveStarLabel.fontColor = stars > 0 ? TileNode.colorGold : UIColor(white: 0.30, alpha: 1)
+            moveStarLabel.position = CGPoint(x: 12, y: -30)
+            moveStarLabel.verticalAlignmentMode = .center
+            moveStarLabel.name = "level_\(level.id)"
+            node.addChild(moveStarLabel)
+
+            // Small "M" label for moves row
+            let movesTag = SKLabelNode(fontNamed: "AvenirNext-Medium")
+            movesTag.text = "M"
+            movesTag.fontSize = 9
+            movesTag.fontColor = UIColor(white: 0.40, alpha: 1)
+            movesTag.position = CGPoint(x: -38, y: -30)
+            movesTag.verticalAlignmentMode = .center
+            movesTag.name = "level_\(level.id)"
+            node.addChild(movesTag)
+
+            // Elegance stars (accent blue) — bottom row
+            let choreoStarLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+            choreoStarLabel.text = starString(count: choreoStars)
+            choreoStarLabel.fontSize = 15
+            choreoStarLabel.fontColor = choreoStars > 0 ? TileNode.colorAccent : UIColor(white: 0.22, alpha: 1)
+            choreoStarLabel.position = CGPoint(x: 12, y: -46)
+            choreoStarLabel.verticalAlignmentMode = .center
+            choreoStarLabel.name = "level_\(level.id)"
+            node.addChild(choreoStarLabel)
+
+            // Small "E" label for elegance row
+            let eleganceTag = SKLabelNode(fontNamed: "AvenirNext-Medium")
+            eleganceTag.text = "E"
+            eleganceTag.fontSize = 9
+            eleganceTag.fontColor = UIColor(white: 0.40, alpha: 1)
+            eleganceTag.position = CGPoint(x: -38, y: -46)
+            eleganceTag.verticalAlignmentMode = .center
+            eleganceTag.name = "level_\(level.id)"
+            node.addChild(eleganceTag)
+
+            // Best moves (shown only when recorded)
             if bestMoves > 0 {
                 let bestLabel = SKLabelNode(fontNamed: "AvenirNext-Regular")
                 bestLabel.text = "Best: \(bestMoves)"
                 bestLabel.fontSize = 10
                 bestLabel.fontColor = UIColor(white: 0.40, alpha: 1)
-                bestLabel.position = CGPoint(x: 0, y: -48)
+                bestLabel.position = CGPoint(x: 0, y: -61)
                 bestLabel.verticalAlignmentMode = .center
                 bestLabel.name = "level_\(level.id)"
                 node.addChild(bestLabel)
             }
 
-            // Accessibility
-            node.accessibilityLabel = "Level \(level.id), \(level.name), \(level.gridCols) by \(level.gridRows), \(diffText), \(stars) stars"
+            // Accessibility — includes both scores
+            let choreoWord = choreoStars == 1 ? "star" : "stars"
+            let moveWord   = stars == 1 ? "star" : "stars"
+            node.accessibilityLabel = "Level \(level.id), \(level.name), \(level.gridCols) by \(level.gridRows), \(diffText), moves: \(stars) \(moveWord), elegance: \(choreoStars) \(choreoWord)"
             node.isAccessibilityElement = true
             node.accessibilityTraits = .button
         } else {
@@ -773,9 +805,10 @@ final class GameViewController: UIViewController {
 
 extension GameViewController: GameSceneDelegate {
     func gameScene(_ scene: GameScene, didCompleteLevel levelID: Int,
-                   moves: Int, stars: Int, trace: MoveTrace) {
+                   moves: Int, stars: Int, choreoScore: ChoreographyScore, trace: MoveTrace) {
         LevelProgress.save(levelID: levelID, stars: stars)
         LevelProgress.saveBestMoves(levelID: levelID, moves: moves)
+        LevelProgress.saveChoreography(levelID: levelID, score: choreoScore)
     }
 
     func gameSceneDidRequestNextLevel(_ scene: GameScene, currentLevelID: Int) {
