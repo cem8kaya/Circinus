@@ -19,19 +19,24 @@ struct GridCoord: Hashable {
 // MARK: - SolveResult
 //
 // Extended to surface the state each new mechanic needs:
-//   * `energy`           — the colour the solver believes is flowing in
-//                          each tile; GameScene uses this to paint pipes.
-//   * `satisfiedSinks`   — sinks receiving the correct colour.
-//   * `unsatisfiedSinks` — sinks that are dark, leaking, or wrong-coloured.
-//   * `brokenTiles`      — tiles shattered by the Overload mechanic (§4).
-//   * `shortedTiles`     — non-mixer tiles where two different colours
-//                          collided, which is an explicit fail state the
-//                          UI flags in red.
-//   * `blockedDiodes`    — §5 pedagogical signal: diode tiles where energy
-//                          arrived at the outFace (backwards) and was
-//                          silently dropped in Pass 2. GameScene uses this
-//                          to fire a one-shot rejection pulse, converting
-//                          the silent-drop state into a legible constraint.
+//   * `energy`              — the colour the solver believes is flowing in
+//                             each tile; GameScene uses this to paint pipes.
+//   * `satisfiedSinks`      — sinks receiving the correct colour.
+//   * `unsatisfiedSinks`    — sinks that are dark, leaking, or wrong-coloured.
+//   * `brokenTiles`         — tiles shattered by the Overload mechanic (§4).
+//   * `shortedTiles`        — non-mixer tiles where two different colours
+//                             collided, which is an explicit fail state the
+//                             UI flags in red.
+//   * `blockedDiodes`       — §5 pedagogical signal: diode tiles where energy
+//                             arrived at the outFace (backwards) and was
+//                             silently dropped in Pass 2. GameScene uses this
+//                             to fire a one-shot rejection pulse, converting
+//                             the silent-drop state into a legible constraint.
+//   * `superposedChoices`   — §6 per-solve record of which uncollapsed
+//                             superposed tiles were placed in state B to reach
+//                             this solution. Empty when no superposed tiles
+//                             exist or when the solve failed. NOT persisted to
+//                             save files — it is a per-solve property only.
 
 struct SolveResult {
     let isSolved: Bool
@@ -43,6 +48,11 @@ struct SolveResult {
     let brokenTiles: Set<GridCoord>
     let shortedTiles: Set<GridCoord>
     let blockedDiodes: Set<GridCoord>
+    /// Which uncollapsed superposed tiles were placed in state B to achieve
+    /// this solution. `true` = state B chosen; `false` = state A chosen.
+    /// Empty when the board has no superposed tiles, or when every branch
+    /// failed (in which case `isSolved` is also `false`).
+    let superposedChoices: [GridCoord: Bool]
 }
 
 // MARK: - PuzzleSolver
@@ -64,20 +74,129 @@ struct SolveResult {
 //            is "every sink receives its required colour and no leaks or
 //            shorts remain." If it defines none, fall back to the legacy
 //            single-closed-loop rule for full backward compatibility.
+//
+// §6 Superposition branching (milestone 1.5):
+//
+//   When the board contains uncollapsed superposed tiles the solver
+//   enumerates all 2^N configurations (N ≤ 4, enforced by precondition).
+//   Each configuration is tried by `solveSingle`, which respects a
+//   `choices` dict that temporarily pins each superposed tile to a single
+//   state instead of the default union.  The first successful branch is
+//   returned together with its `superposedChoices` record.
+//
+//   Enumeration order is 0 … 2^N−1 (non-recursive bitmask), so the
+//   all-state-A combination (mask 0) is always tried first — giving the
+//   lexicographic preference for state A described in the spec.
 
 final class PuzzleSolver {
 
+    // MARK: - Public entry point
+
+    /// Solve the board, branching over uncollapsed superposed tiles (§6).
+    ///
+    /// The level-design contract caps uncollapsed superposed tiles at 4
+    /// (16 branches maximum).  Exceeding this trips a `precondition`.
+    ///
+    /// If multiple branches solve, the one with the fewest state-B choices
+    /// is returned (the all-state-A branch, mask 0, is tried first).
     static func solve(grid: [[TileNode]], cols: Int, rows: Int) -> SolveResult {
+        let superposed = collectUncollapsedSuperposed(grid: grid, cols: cols, rows: rows)
+
+        // Level-design contract: max 4 uncollapsed superposed tiles per level.
+        // Document in the level JSON schema: more than 4 is undefined behaviour.
+        precondition(
+            superposed.count <= 4,
+            "Level has \(superposed.count) uncollapsed superposed tiles; max is 4. " +
+            "Reduce in the level JSON or collapse tiles before play begins."
+        )
+
+        // Fast path: no superposed tiles — no branching overhead.
+        if superposed.isEmpty {
+            return solveSingle(grid: grid, cols: cols, rows: rows, choices: [:])
+        }
+
+        // Enumerate all 2^N combinations via bitmask (non-recursive).
+        // bit-i of `mask` == 1  →  superposed[i] is placed in state B.
+        // mask == 0             →  all tiles in state A (tried first).
+        for mask in 0 ..< (1 << superposed.count) {
+            var choices: [GridCoord: Bool] = [:]
+            for (i, coord) in superposed.enumerated() {
+                choices[coord] = (mask >> i) & 1 == 1
+            }
+            let result = solveSingle(grid: grid, cols: cols, rows: rows, choices: choices)
+            if result.isSolved { return result }
+        }
+
+        // No branch solved.  Return the all-state-A configuration for its
+        // diagnostic info (leaky tiles, blocked diodes, etc.).  `isSolved`
+        // will be false, and `superposedChoices` will record all tiles as A.
+        var allAChoices: [GridCoord: Bool] = [:]
+        for coord in superposed { allAChoices[coord] = false }
+        return solveSingle(grid: grid, cols: cols, rows: rows, choices: allAChoices)
+    }
+
+    // MARK: - Private helpers
+
+    /// Collect the coords of every tile whose role is `.superposed` with
+    /// `collapsed == false`.  These form the branching set for `solve`.
+    private static func collectUncollapsedSuperposed(
+        grid: [[TileNode]],
+        cols: Int,
+        rows: Int
+    ) -> [GridCoord] {
+        var result: [GridCoord] = []
+        for row in 0..<rows {
+            for col in 0..<cols {
+                if case .superposed(_, _, false, _) = grid[row][col].role {
+                    result.append(GridCoord(col: col, row: row))
+                }
+            }
+        }
+        return result
+    }
+
+    /// Returns the effective connections for `tile` at `coord`, honouring
+    /// the per-branch `choices` override.
+    ///
+    /// If `coord` appears in `choices`, the tile is treated as already
+    /// collapsed to the indicated state (false = A, true = B) rather than
+    /// using the union of both states that `tile.effectiveConnections` would
+    /// return for an uncollapsed superposed tile.  All other tiles delegate
+    /// directly to `tile.effectiveConnections`.
+    private static func effectiveConnections(
+        for tile: TileNode,
+        at coord: GridCoord,
+        choices: [GridCoord: Bool]
+    ) -> Set<ConnectionSide> {
+        if let useB = choices[coord],
+           case .superposed(let a, let b, _, _) = tile.role {
+            let offset = useB ? b : a
+            return tile.connectionsAt(rotation: offset + tile.rotationSteps)
+        }
+        return tile.effectiveConnections
+    }
+
+    /// Single-configuration three-pass solve.
+    ///
+    /// `choices` pins individual superposed tiles to a specific state for
+    /// this run; all other tiles use their normal `effectiveConnections`.
+    /// When `choices` is empty this is identical to the pre-1.5 behaviour.
+    private static func solveSingle(
+        grid: [[TileNode]],
+        cols: Int,
+        rows: Int,
+        choices: [GridCoord: Bool]
+    ) -> SolveResult {
 
         // ------------------------------------------------------------------
         // Pass 1: topology + leak detection
         // ------------------------------------------------------------------
-        var leaky   = Set<GridCoord>()
-        var paired  = Set<GridCoord>()
-        var broken  = Set<GridCoord>()
+        var leaky      = Set<GridCoord>()
+        var paired     = Set<GridCoord>()
+        var broken     = Set<GridCoord>()
         var emptyNodes = Set<GridCoord>()
-        var sources = [(GridCoord, EnergyColor)]()
-        var sinks   = [(GridCoord, ConnectionSide, EnergyColor)]()
+        var sources    = [(GridCoord, EnergyColor)]()
+        var sinks      = [(GridCoord, ConnectionSide, EnergyColor)]()
 
         for row in 0..<rows {
             for col in 0..<cols {
@@ -98,13 +217,14 @@ final class PuzzleSolver {
                 }
 
                 var tileIsLeaky = false
-                for side in tile.effectiveConnections {
+                for side in effectiveConnections(for: tile, at: coord, choices: choices) {
                     let n = coord.neighbour(in: side)
                     guard n.col >= 0, n.col < cols, n.row >= 0, n.row < rows else {
                         tileIsLeaky = true; continue
                     }
                     let nTile = grid[n.row][n.col]
-                    if nTile.isBroken || !nTile.effectiveConnections.contains(side.opposite) {
+                    if nTile.isBroken ||
+                       !effectiveConnections(for: nTile, at: n, choices: choices).contains(side.opposite) {
                         tileIsLeaky = true
                     }
                 }
@@ -155,7 +275,7 @@ final class PuzzleSolver {
                 // so we don't repeat the rotation math for every side below.
                 let sourceDiodeFaces = tile.role.isDiode ? tile.diodeFaces : nil
 
-                for side in tile.effectiveConnections {
+                for side in effectiveConnections(for: tile, at: coord, choices: choices) {
                     // §5 Diode: a diode may only emit energy on its outFace.
                     // Energy cannot exit backward through the inFace.
                     if let df = sourceDiodeFaces, side != df.outFace { continue }
@@ -164,7 +284,7 @@ final class PuzzleSolver {
                     guard paired.contains(n) else { continue }
                     let nTile = grid[n.row][n.col]
                     // Must be a reciprocated edge.
-                    guard nTile.effectiveConnections.contains(side.opposite) else { continue }
+                    guard effectiveConnections(for: nTile, at: n, choices: choices).contains(side.opposite) else { continue }
 
                     // §5 Diode: energy may only *enter* a diode at its inFace.
                     // Arriving at the outFace (backwards) silently drops the
@@ -207,11 +327,11 @@ final class PuzzleSolver {
             for coord in paired {
                 let tile = grid[coord.row][coord.col]
                 guard tile.role.isMixer, let out = energy[coord], out != .none else { continue }
-                for side in tile.effectiveConnections {
+                for side in effectiveConnections(for: tile, at: coord, choices: choices) {
                     let n = coord.neighbour(in: side)
                     guard paired.contains(n) else { continue }
                     let nTile = grid[n.row][n.col]
-                    guard nTile.effectiveConnections.contains(side.opposite) else { continue }
+                    guard effectiveConnections(for: nTile, at: n, choices: choices).contains(side.opposite) else { continue }
 
                     // §5 Diode: mixer output obeys the same inFace rule.
                     if nTile.role.isDiode && side.opposite != nTile.diodeFaces.inFace {
@@ -245,7 +365,7 @@ final class PuzzleSolver {
             while !queue.isEmpty {
                 let c = queue.removeFirst()
                 let tile = grid[c.row][c.col]
-                for side in tile.effectiveConnections {
+                for side in effectiveConnections(for: tile, at: c, choices: choices) {
                     let n = c.neighbour(in: side)
                     if paired.contains(n), !connected.contains(n) {
                         connected.insert(n); queue.append(n)
@@ -292,7 +412,8 @@ final class PuzzleSolver {
             unsatisfiedSinks: unsatisfied,
             brokenTiles: broken,
             shortedTiles: shorted,
-            blockedDiodes: blockedDiodes
+            blockedDiodes: blockedDiodes,
+            superposedChoices: choices
         )
     }
 }
