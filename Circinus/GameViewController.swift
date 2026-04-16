@@ -773,7 +773,7 @@ final class GameViewController: UIViewController {
 
 extension GameViewController: GameSceneDelegate {
     func gameScene(_ scene: GameScene, didCompleteLevel levelID: Int,
-                   moves: Int, stars: Int) {
+                   moves: Int, stars: Int, trace: MoveTrace) {
         LevelProgress.save(levelID: levelID, stars: stars)
         LevelProgress.saveBestMoves(levelID: levelID, moves: moves)
     }
