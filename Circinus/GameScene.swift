@@ -5,7 +5,7 @@ import UIKit
 
 protocol GameSceneDelegate: AnyObject {
     func gameScene(_ scene: GameScene, didCompleteLevel levelID: Int,
-                   moves: Int, stars: Int, trace: MoveTrace)
+                   moves: Int, stars: Int, choreoScore: ChoreographyScore, trace: MoveTrace)
     func gameSceneDidRequestNextLevel(_ scene: GameScene, currentLevelID: Int)
     func gameSceneDidRequestRestart(_ scene: GameScene, levelID: Int)
     func gameSceneDidRequestMenu(_ scene: GameScene)
@@ -68,6 +68,11 @@ final class GameScene: SKScene {
     // Win banner reference for animated dismiss
     private var bannerNode: SKNode?
     private var dimOverlayNode: SKNode?
+
+    // "How?" chip highlights panel (milestone 1.3)
+    private var highlightsPanelNode: SKNode?
+    private var isHighlightsPanelShown: Bool = false
+    private var pendingHighlights: [PatternHighlight] = []
 
     // Confirm restart overlay
     private var confirmOverlay: SKNode?
@@ -636,6 +641,11 @@ final class GameScene: SKScene {
                 performHint()
                 return
             }
+            if name == "howChip" {
+                SoundManager.shared.playButtonTap()
+                if isHighlightsPanelShown { hideHighlightsPanel() } else { showHighlightsPanel() }
+                return
+            }
             if name == "nextButton" {
                 SoundManager.shared.playButtonTap()
                 animateBannerDismiss { [weak self] in
@@ -1084,6 +1094,10 @@ final class GameScene: SKScene {
             completion()
             return
         }
+        // Highlights panel lives inside the banner node, so it dismisses automatically.
+        highlightsPanelNode = nil
+        isHighlightsPanelShown = false
+
         let scaleDown = SKAction.scale(to: 0.3, duration: 0.2)
         scaleDown.timingMode = .easeIn
         let fadeOut = SKAction.fadeOut(withDuration: 0.2)
@@ -1204,9 +1218,11 @@ final class GameScene: SKScene {
             isSolved = true
             timerActive = false
             let stars = calculateStars()
-            triggerWinSequence(stars: stars)
+            let choreo = ChoreographyAnalyzer.analyze(trace: moveTrace, level: levelData)
+            triggerWinSequence(moveStars: stars, choreoScore: choreo)
             gameDelegate?.gameScene(self, didCompleteLevel: levelData.id,
-                                    moves: moveCount, stars: stars, trace: moveTrace)
+                                    moves: moveCount, stars: stars,
+                                    choreoScore: choreo, trace: moveTrace)
         }
     }
 
@@ -1218,7 +1234,7 @@ final class GameScene: SKScene {
 
     // MARK: - Win sequence
 
-    private func triggerWinSequence(stars: Int) {
+    private func triggerWinSequence(moveStars: Int, choreoScore: ChoreographyScore) {
         // 1. Grid container scale pulse
         let pulseUp   = SKAction.scale(to: 1.04, duration: 0.15)
         let pulseDown = SKAction.scale(to: 1.0, duration: 0.15)
@@ -1276,7 +1292,7 @@ final class GameScene: SKScene {
         run(SKAction.sequence([
             SKAction.wait(forDuration: 0.6),
             SKAction.run { [weak self] in
-                self?.showCompletionBanner(stars: stars)
+                self?.showCompletionBanner(moveStars: moveStars, choreoScore: choreoScore)
             }
         ]))
 
@@ -1286,9 +1302,26 @@ final class GameScene: SKScene {
         generator.notificationOccurred(.success)
     }
 
-    // MARK: - Completion banner
+    // MARK: - Completion banner (milestone 1.3: dual-scoring)
+    //
+    // Layout (card 300×300, banner anchored at scene centre + 10pt up):
+    //   y=120  Title "Circuit Sealed!"
+    //   y=88   "Completed in N moves"
+    //   y=68   Time
+    //   y=50   thin divider
+    //   y=35   MOVES  ★★★   (gold)
+    //   y=-3   ELEGANCE ★★☆ (accent blue)
+    //   y=-30  "How?" chip — tap-to-reveal highlights
+    //   y=-62  Next Level button
+    //   y=-96  Replay / Menu buttons
+    //
+    // A separate highlightsPanelNode slides in below the card on "How?" tap.
 
-    private func showCompletionBanner(stars: Int) {
+    private func showCompletionBanner(moveStars: Int, choreoScore: ChoreographyScore) {
+        // Cache highlights so the "How?" chip handler can build the panel.
+        pendingHighlights = choreoScore.highlights
+        isHighlightsPanelShown = false
+
         let banner = SKNode()
         banner.zPosition = 100
         banner.position = CGPoint(x: size.width / 2, y: size.height / 2 + 10)
@@ -1309,7 +1342,7 @@ final class GameScene: SKScene {
 
         // Card background
         let cardW: CGFloat = 300
-        let cardH: CGFloat = 280
+        let cardH: CGFloat = 300
         let card = SKShapeNode(rectOf: CGSize(width: cardW, height: cardH), cornerRadius: 22)
         card.fillColor = UIColor(red: 0.10, green: 0.11, blue: 0.15, alpha: 0.98)
         card.strokeColor = TileNode.colorConnected.withAlphaComponent(0.4)
@@ -1326,19 +1359,21 @@ final class GameScene: SKScene {
         // Title
         let title = SKLabelNode(fontNamed: "AvenirNext-Heavy")
         title.text = "Circuit Sealed!"
-        title.fontSize = 30
+        title.fontSize = 28
         title.fontColor = TileNode.colorConnected
-        title.position = CGPoint(x: 0, y: 85)
+        title.position = CGPoint(x: 0, y: 120)
         title.verticalAlignmentMode = .center
+        title.horizontalAlignmentMode = .center
         banner.addChild(title)
 
         // Move count
         let subtitle = SKLabelNode(fontNamed: "AvenirNext-Regular")
         subtitle.text = "Completed in \(moveCount) moves"
-        subtitle.fontSize = 16
+        subtitle.fontSize = 15
         subtitle.fontColor = UIColor(white: 0.70, alpha: 1)
-        subtitle.position = CGPoint(x: 0, y: 55)
+        subtitle.position = CGPoint(x: 0, y: 88)
         subtitle.verticalAlignmentMode = .center
+        subtitle.horizontalAlignmentMode = .center
         banner.addChild(subtitle)
 
         // Time
@@ -1347,74 +1382,160 @@ final class GameScene: SKScene {
         let timeStr = String(format: "Time: %d:%02d", mins, secs)
         let timeLabel = SKLabelNode(fontNamed: "AvenirNext-Regular")
         timeLabel.text = timeStr
-        timeLabel.fontSize = 14
+        timeLabel.fontSize = 13
         timeLabel.fontColor = UIColor(white: 0.50, alpha: 1)
-        timeLabel.position = CGPoint(x: 0, y: 35)
+        timeLabel.position = CGPoint(x: 0, y: 68)
         timeLabel.verticalAlignmentMode = .center
+        timeLabel.horizontalAlignmentMode = .center
         banner.addChild(timeLabel)
 
-        // Animated stars
-        let starPositions: [CGFloat] = [-40, 0, 40]
-        for (i, xPos) in starPositions.enumerated() {
-            let earned = i < stars
+        // Thin section divider
+        let divPath = CGMutablePath()
+        divPath.move(to: CGPoint(x: -110, y: 50))
+        divPath.addLine(to: CGPoint(x: 110, y: 50))
+        let divider = SKShapeNode(path: divPath)
+        divider.strokeColor = UIColor(white: 1.0, alpha: 0.08)
+        divider.lineWidth = 1
+        banner.addChild(divider)
+
+        // MARK: Row 1 — "MOVES" label + 3 gold stars
+
+        let movesRowLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+        movesRowLabel.text = "MOVES"
+        movesRowLabel.fontSize = 11
+        movesRowLabel.fontColor = UIColor(white: 0.50, alpha: 1)
+        movesRowLabel.position = CGPoint(x: -118, y: 35)
+        movesRowLabel.horizontalAlignmentMode = .left
+        movesRowLabel.verticalAlignmentMode = .center
+        banner.addChild(movesRowLabel)
+
+        let moveStarXPositions: [CGFloat] = [10, 42, 74]
+        for (i, xPos) in moveStarXPositions.enumerated() {
+            let earned = i < moveStars
             let starLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
             starLabel.text = earned ? "\u{2605}" : "\u{2606}"
-            starLabel.fontSize = 44
+            starLabel.fontSize = 30
             starLabel.fontColor = earned ? TileNode.colorGold : UIColor(white: 0.25, alpha: 1)
-            starLabel.position = CGPoint(x: xPos, y: 0)
+            starLabel.position = CGPoint(x: xPos, y: 35)
             starLabel.verticalAlignmentMode = .center
+            starLabel.horizontalAlignmentMode = .center
             starLabel.setScale(0.0)
+            starLabel.accessibilityLabel = earned ? "Move star earned" : "Move star not earned"
+            starLabel.isAccessibilityElement = true
             banner.addChild(starLabel)
 
-            // Pop-in animation for each star
-            let delay = 0.3 + Double(i) * 0.15
+            let delay = 0.3 + Double(i) * 0.12
             starLabel.run(SKAction.sequence([
                 SKAction.wait(forDuration: delay),
-                SKAction.group([
-                    SKAction.scale(to: earned ? 1.2 : 0.9, duration: 0.2),
-                ]),
-                SKAction.scale(to: 1.0, duration: 0.1)
+                SKAction.scale(to: earned ? 1.25 : 0.9, duration: 0.18),
+                SKAction.scale(to: 1.0, duration: 0.08)
             ]))
-
             if earned {
-                // Sparkle on earned stars
                 starLabel.run(SKAction.sequence([
-                    SKAction.wait(forDuration: delay + 0.2),
-                    SKAction.run { [weak self] in
-                        self?.addStarSparkle(at: starLabel, in: banner)
-                    }
+                    SKAction.wait(forDuration: delay + 0.18),
+                    SKAction.run { [weak self] in self?.addStarSparkle(at: starLabel, in: banner) }
                 ]))
             }
         }
 
-        // Action buttons
-        let buttonY: CGFloat = -55
+        // MARK: Row 2 — "ELEGANCE" label + 3 accent-blue stars
 
-        // Next Level button
+        let eleganceRowLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+        eleganceRowLabel.text = "ELEGANCE"
+        eleganceRowLabel.fontSize = 11
+        eleganceRowLabel.fontColor = UIColor(white: 0.50, alpha: 1)
+        eleganceRowLabel.position = CGPoint(x: -118, y: -3)
+        eleganceRowLabel.horizontalAlignmentMode = .left
+        eleganceRowLabel.verticalAlignmentMode = .center
+        banner.addChild(eleganceRowLabel)
+
+        let choreoStarXPositions: [CGFloat] = [10, 42, 74]
+        for (i, xPos) in choreoStarXPositions.enumerated() {
+            let earned = i < choreoScore.stars
+            let starLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+            starLabel.text = earned ? "\u{2605}" : "\u{2606}"
+            starLabel.fontSize = 30
+            starLabel.fontColor = earned ? TileNode.colorAccent : UIColor(white: 0.25, alpha: 1)
+            starLabel.position = CGPoint(x: xPos, y: -3)
+            starLabel.verticalAlignmentMode = .center
+            starLabel.horizontalAlignmentMode = .center
+            starLabel.setScale(0.0)
+            starLabel.accessibilityLabel = earned ? "Elegance star earned" : "Elegance star not earned"
+            starLabel.isAccessibilityElement = true
+            banner.addChild(starLabel)
+
+            let delay = 0.6 + Double(i) * 0.12
+            starLabel.run(SKAction.sequence([
+                SKAction.wait(forDuration: delay),
+                SKAction.scale(to: earned ? 1.25 : 0.9, duration: 0.18),
+                SKAction.scale(to: 1.0, duration: 0.08)
+            ]))
+        }
+
+        // Banner-level accessibility summary (both scores)
+        let moveStarWord  = moveStars == 1 ? "star" : "stars"
+        let choreoStarWord = choreoScore.stars == 1 ? "star" : "stars"
+        banner.accessibilityLabel = "Level complete. Moves: \(moveStars) \(moveStarWord). Elegance: \(choreoScore.stars) \(choreoStarWord)."
+        banner.isAccessibilityElement = false   // children carry individual labels
+
+        // MARK: "How?" chip — tap-to-reveal highlights
+        //
+        // Points are intentionally hidden until the player taps "How?" to avoid
+        // overwhelming first-time viewers (design rule: stars only by default).
+
+        let howNode = SKNode()
+        howNode.name = "howChip"
+
+        let howBg = SKShapeNode(rectOf: CGSize(width: 76, height: 24), cornerRadius: 12)
+        howBg.fillColor = UIColor(white: 0.18, alpha: 1)
+        howBg.strokeColor = TileNode.colorAccent.withAlphaComponent(0.45)
+        howBg.lineWidth = 1
+        howBg.name = "howChip"
+        howNode.addChild(howBg)
+
+        let howLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+        howLabel.text = "How? \u{25BE}"      // ▾ closed-triangle indicates expandable
+        howLabel.fontSize = 12
+        howLabel.fontColor = TileNode.colorAccent
+        howLabel.verticalAlignmentMode = .center
+        howLabel.horizontalAlignmentMode = .center
+        howLabel.name = "howChipLabel"
+        howNode.addChild(howLabel)
+
+        howNode.position = CGPoint(x: 0, y: -30)
+        howNode.accessibilityLabel = "How does Elegance scoring work? Tap to expand."
+        howNode.isAccessibilityElement = true
+        howNode.accessibilityTraits = .button
+        banner.addChild(howNode)
+
+        // MARK: Action buttons
+
         let isLastLevel = levelData.id >= (try? LevelLoader.load().levels.count) ?? 0
+        let buttonY: CGFloat = -62
+
         if !isLastLevel {
             let nextBtn = makeActionButton(text: "Next Level", width: 160, height: 44,
-                                            color: TileNode.colorConnected,
-                                            textColor: UIColor(red: 0.06, green: 0.07, blue: 0.11, alpha: 1),
-                                            name: "nextButton")
+                                           color: TileNode.colorConnected,
+                                           textColor: UIColor(red: 0.06, green: 0.07, blue: 0.11, alpha: 1),
+                                           name: "nextButton")
             nextBtn.position = CGPoint(x: 0, y: buttonY)
             banner.addChild(nextBtn)
         }
 
-        // Replay button
         let replayBtn = makeActionButton(text: "Replay", width: 120, height: 36,
                                           color: UIColor(white: 0.20, alpha: 1),
                                           textColor: UIColor(white: 0.70, alpha: 1),
                                           name: "replayButton")
-        replayBtn.position = CGPoint(x: isLastLevel ? 60 : 0, y: buttonY - (isLastLevel ? 0 : 50))
+        replayBtn.position = CGPoint(x: isLastLevel ? 60 : 0,
+                                      y: buttonY - (isLastLevel ? 0 : 48))
         banner.addChild(replayBtn)
 
-        // Menu button
         let menuBtn = makeActionButton(text: "Menu", width: 100, height: 36,
                                         color: UIColor(white: 0.20, alpha: 1),
                                         textColor: UIColor(white: 0.70, alpha: 1),
                                         name: "menuButton")
-        menuBtn.position = CGPoint(x: isLastLevel ? -60 : 0, y: buttonY - (isLastLevel ? 0 : 90))
+        menuBtn.position = CGPoint(x: isLastLevel ? -60 : 0,
+                                    y: buttonY - (isLastLevel ? 0 : 84))
         banner.addChild(menuBtn)
 
         addChild(banner)
@@ -1425,6 +1546,114 @@ final class GameScene: SKScene {
         let scaleUp = SKAction.scale(to: 1.0, duration: 0.3)
         scaleUp.timingMode = .easeOut
         banner.run(SKAction.group([fadeIn, scaleUp]))
+    }
+
+    // MARK: - Highlights panel (How? chip expansion)
+
+    private func showHighlightsPanel() {
+        guard !isHighlightsPanelShown, let banner = bannerNode else { return }
+        isHighlightsPanelShown = true
+
+        // Update chip label to indicate collapse
+        if let chip = banner.childNode(withName: "howChip"),
+           let lbl = chip.childNode(withName: "howChipLabel") as? SKLabelNode {
+            lbl.text = "How? \u{25B4}"     // ▴ open-triangle
+        }
+
+        let highlights = pendingHighlights
+        let lineH: CGFloat = 22
+        let panelPad: CGFloat = 14
+        let panelH: CGFloat = max(60, CGFloat(highlights.count) * lineH + panelPad * 2)
+        let panelW: CGFloat = 280
+
+        let panel = SKNode()
+        panel.zPosition = 101
+        // Position below the main card (card bottom is at y = -150 in banner coords)
+        panel.position = CGPoint(x: 0, y: -150 - panelH / 2 - 8)
+        panel.alpha = 0
+
+        let bg = SKShapeNode(rectOf: CGSize(width: panelW, height: panelH), cornerRadius: 14)
+        bg.fillColor = UIColor(red: 0.10, green: 0.11, blue: 0.16, alpha: 0.97)
+        bg.strokeColor = TileNode.colorAccent.withAlphaComponent(0.25)
+        bg.lineWidth = 1
+        panel.addChild(bg)
+
+        if highlights.isEmpty {
+            let noHighlight = SKLabelNode(fontNamed: "AvenirNext-Regular")
+            noHighlight.text = "No patterns detected this solve."
+            noHighlight.fontSize = 12
+            noHighlight.fontColor = UIColor(white: 0.45, alpha: 1)
+            noHighlight.verticalAlignmentMode = .center
+            noHighlight.horizontalAlignmentMode = .center
+            noHighlight.position = CGPoint(x: 0, y: 0)
+            panel.addChild(noHighlight)
+        } else {
+            let startY = (panelH / 2) - panelPad - lineH / 2
+            for (i, highlight) in highlights.enumerated() {
+                let row = SKNode()
+                row.position = CGPoint(x: 0, y: startY - CGFloat(i) * lineH)
+
+                // Bullet + description
+                let bullet = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+                bullet.text = "\u{2022}"
+                bullet.fontSize = 11
+                bullet.fontColor = TileNode.colorAccent
+                bullet.verticalAlignmentMode = .center
+                bullet.horizontalAlignmentMode = .left
+                bullet.position = CGPoint(x: -panelW / 2 + 12, y: 0)
+                row.addChild(bullet)
+
+                let desc = SKLabelNode(fontNamed: "AvenirNext-Regular")
+                desc.text = highlight.description
+                desc.fontSize = 11
+                desc.fontColor = UIColor(white: 0.80, alpha: 1)
+                desc.verticalAlignmentMode = .center
+                desc.horizontalAlignmentMode = .left
+                desc.position = CGPoint(x: -panelW / 2 + 24, y: 0)
+                desc.accessibilityLabel = highlight.description
+                desc.isAccessibilityElement = true
+                row.addChild(desc)
+
+                // Points badge (expanded panel is the one place we show raw pts)
+                let pts = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+                pts.text = "+\(highlight.points)"
+                pts.fontSize = 10
+                pts.fontColor = TileNode.colorGold
+                pts.verticalAlignmentMode = .center
+                pts.horizontalAlignmentMode = .right
+                pts.position = CGPoint(x: panelW / 2 - 12, y: 0)
+                row.addChild(pts)
+
+                panel.addChild(row)
+            }
+        }
+
+        banner.addChild(panel)
+        highlightsPanelNode = panel
+
+        panel.run(SKAction.group([
+            SKAction.fadeIn(withDuration: 0.22),
+            SKAction.sequence([
+                SKAction.moveBy(x: 0, y: -8, duration: 0),
+                SKAction.moveBy(x: 0, y: 8, duration: 0.22)
+            ])
+        ]))
+    }
+
+    private func hideHighlightsPanel() {
+        guard isHighlightsPanelShown, let banner = bannerNode else { return }
+        isHighlightsPanelShown = false
+
+        if let chip = banner.childNode(withName: "howChip"),
+           let lbl = chip.childNode(withName: "howChipLabel") as? SKLabelNode {
+            lbl.text = "How? \u{25BE}"
+        }
+
+        highlightsPanelNode?.run(SKAction.sequence([
+            SKAction.fadeOut(withDuration: 0.15),
+            SKAction.removeFromParent()
+        ]))
+        highlightsPanelNode = nil
     }
 
     private func addStarSparkle(at star: SKLabelNode, in parent: SKNode) {

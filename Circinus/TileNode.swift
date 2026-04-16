@@ -143,10 +143,31 @@ enum TileRole: Equatable {
     /// direction unambiguous even before the player taps.
     case diode
 
-    var isMixer: Bool  { if case .mixer  = self { return true } else { return false } }
-    var isSource: Bool { if case .source = self { return true } else { return false } }
-    var isSink: Bool   { if case .sink   = self { return true } else { return false } }
-    var isDiode: Bool  { if case .diode  = self { return true } else { return false } }
+    // MARK: §6 Superposition (data-model half — visuals deferred to milestone 1.6)
+    //
+    // ⚠️  MUTABLE ASSOCIATED VALUE — intentional design exception.
+    // This is the ONE place in TileRole where mutable state (collapsed/pickedB)
+    // lives inside an enum case. All other roles are fully immutable.  Any future
+    // mutation must go through collapseSuperposition(toB:) on TileNode.
+    //
+    // Geometry contract:
+    //   • TileNode.rotationSteps always tracks state A's net rotation.
+    //   • stateA / stateB are initial angular offsets (0–3) added on top of
+    //     rotationSteps in effectiveConnections so both states advance together
+    //     on every CW rotation — rotate() needs no special handling.
+    //   • Do NOT combine with .fragile in this milestone; treat the pairing
+    //     as undefined behaviour until explicitly designed.
+    //
+    // JSON encoding:  "superposed:A:B"  (e.g. "superposed:0:2")
+    //   A = stateA initial offset (int 0–3)
+    //   B = stateB initial offset (int 0–3)
+    case superposed(stateA: Int, stateB: Int, collapsed: Bool, pickedB: Bool)
+
+    var isMixer:      Bool { if case .mixer      = self { return true } else { return false } }
+    var isSource:     Bool { if case .source     = self { return true } else { return false } }
+    var isSink:       Bool { if case .sink       = self { return true } else { return false } }
+    var isDiode:      Bool { if case .diode      = self { return true } else { return false } }
+    var isSuperposed: Bool { if case .superposed = self { return true } else { return false } }
 }
 
 // MARK: - TileNode
@@ -253,6 +274,22 @@ final class TileNode: SKNode {
         return (inFace: inf, outFace: outf)
     }
 
+    // MARK: §6 Superposition collapse
+    //
+    // ⚠️  This is the authorised mutation point for the superposed associated
+    // value.  No other code should write to `.superposed` directly.
+    //
+    // After collapse, effectiveConnections returns only the chosen state.
+    // Subsequent player rotations still apply (rotationSteps keeps advancing),
+    // so the collapsed tile behaves like a normal tile fixed to one shape.
+    //
+    // toB = false → collapse to state A (the canonical rotationSteps angle)
+    // toB = true  → collapse to state B (rotationSteps + stored stateB offset)
+    func collapseSuperposition(toB: Bool) {
+        guard case .superposed(let a, let b, false, _) = role else { return }
+        role = .superposed(stateA: a, stateB: b, collapsed: true, pickedB: toB)
+    }
+
     /// Connections this tile actually participates in after accounting for
     /// its role. Broken tiles conduct nothing; sources/sinks only expose
     /// their single declared face. This is what the solver must consult,
@@ -270,6 +307,18 @@ final class TileNode: SKNode {
             // neighbour is flagged leaky. Directionality is a flow property
             // enforced by PuzzleSolver Pass 2, not a topology property.
             return activeConnections
+        case .superposed(let a, let b, let collapsed, let pickedB):
+            // §6 Superposition: uncollapsed → union of both state rotations.
+            // Collapsed → single chosen state's connections.
+            // rotationSteps advances both states equally (they stay at fixed
+            // angular offset relative to each other on every CW rotation).
+            if collapsed {
+                let chosen = pickedB ? b : a
+                return connectionsAt(rotation: chosen + rotationSteps)
+            } else {
+                return connectionsAt(rotation: a + rotationSteps)
+                    .union(connectionsAt(rotation: b + rotationSteps))
+            }
         }
     }
 
