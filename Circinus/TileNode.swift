@@ -809,6 +809,64 @@ final class TileNode: SKNode {
         }
     }
 
+    /// §5 Diode — pedagogical rejection pulse.
+    ///
+    /// Fired by GameScene when the solver records this diode in
+    /// `SolveResult.blockedDiodes` (energy arrived at the outFace and was
+    /// dropped). Three simultaneous signals:
+    ///
+    ///   1. Amber border flash — colour-coded warning on the tile perimeter.
+    ///   2. Expanding burst ring at the canonical inFace tip (local y = −halfTile).
+    ///      Because the animation lives in *local* space, `zRotation` carries
+    ///      it to the correct world-space entry face automatically.
+    ///   3. bgNode scale clench — tactile "blocked by a barrier" feel without
+    ///      shifting the tile's grid position.
+    ///
+    /// One-shot (no repeat). Safe to call repeatedly — each call is
+    /// independent (uses withKey to cancel any in-flight instance).
+    func showRejectionPulse() {
+        guard role.isDiode, !isBroken else { return }
+
+        let amber = UIColor(red: 1.0, green: 0.55, blue: 0.10, alpha: 1)
+
+        // 1. Amber border flash on bgNode stroke.
+        let flashIn  = SKAction.customAction(withDuration: 0.20) { [weak self] _, elapsed in
+            guard let self = self else { return }
+            let t = CGFloat(elapsed / 0.20)
+            self.bgNode.strokeColor = TileNode.colorBGStroke.lerp(to: amber, t: t)
+        }
+        let flashOut = SKAction.customAction(withDuration: 0.30) { [weak self] _, elapsed in
+            guard let self = self else { return }
+            let t = CGFloat(elapsed / 0.30)
+            self.bgNode.strokeColor = amber.lerp(to: TileNode.colorBGStroke, t: t)
+        }
+        bgNode.run(SKAction.sequence([flashIn, flashOut]), withKey: "rejectionBorder")
+
+        // 2. Expanding ring at the canonical inFace tip (local-space y = −halfTile).
+        //    The ring stays in local space; zRotation maps it to world-space inFace.
+        let ring = SKShapeNode(circleOfRadius: tileSize * 0.10)
+        ring.fillColor   = .clear
+        ring.strokeColor = amber.withAlphaComponent(0.85)
+        ring.lineWidth   = 1.8
+        ring.position    = CGPoint(x: 0, y: -tileSize / 2)
+        ring.zPosition   = 6
+        ring.name        = "rejectionRing"
+        addChild(ring)
+
+        let expand = SKAction.scale(to: 2.4, duration: 0.38)
+        expand.timingMode = .easeOut
+        ring.run(SKAction.group([expand, SKAction.fadeOut(withDuration: 0.38)])) {
+            ring.removeFromParent()
+        }
+
+        // 3. bgNode scale clench: tile briefly "resists" the blocked energy.
+        bgNode.run(SKAction.sequence([
+            SKAction.scale(to: 0.95, duration: 0.06),
+            SKAction.scale(to: 1.03, duration: 0.06),
+            SKAction.scale(to: 1.00, duration: 0.05)
+        ]), withKey: "rejectionClench")
+    }
+
     // MARK: - Connection animation
 
     private func animateConnectionChange() {

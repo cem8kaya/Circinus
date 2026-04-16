@@ -1142,6 +1142,15 @@ final class GameScene: SKScene {
             }
         }
 
+        // §5 Diode: fire a one-shot rejection pulse on every diode that
+        // blocked flow this pass. Skipped on a solved board — no need to
+        // flag errors when the puzzle is already won.
+        if !result.isSolved {
+            for coord in result.blockedDiodes {
+                tileGrid[coord.row][coord.col].showRejectionPulse()
+            }
+        }
+
         if result.isSolved && !isSolved {
             isSolved = true
             timerActive = false

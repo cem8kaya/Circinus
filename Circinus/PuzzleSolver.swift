@@ -27,6 +27,11 @@ struct GridCoord: Hashable {
 //   * `shortedTiles`     — non-mixer tiles where two different colours
 //                          collided, which is an explicit fail state the
 //                          UI flags in red.
+//   * `blockedDiodes`    — §5 pedagogical signal: diode tiles where energy
+//                          arrived at the outFace (backwards) and was
+//                          silently dropped in Pass 2. GameScene uses this
+//                          to fire a one-shot rejection pulse, converting
+//                          the silent-drop state into a legible constraint.
 
 struct SolveResult {
     let isSolved: Bool
@@ -37,6 +42,7 @@ struct SolveResult {
     let unsatisfiedSinks: Set<GridCoord>
     let brokenTiles: Set<GridCoord>
     let shortedTiles: Set<GridCoord>
+    let blockedDiodes: Set<GridCoord>
 }
 
 // MARK: - PuzzleSolver
@@ -124,8 +130,11 @@ final class PuzzleSolver {
         // Complexity: O((V + E) · C) where C is the number of distinct
         // colour states (≤ 4). On typical 8×8 boards this is trivial.
 
-        var energy  = [GridCoord: EnergyColor]()
-        var shorted = Set<GridCoord>()
+        var energy        = [GridCoord: EnergyColor]()
+        var shorted       = Set<GridCoord>()
+        // §5 Diode rejection: coords where energy arrived at the wrong face.
+        // Populated only in Pass 2 — does not affect topology or goal logic.
+        var blockedDiodes = Set<GridCoord>()
 
         // Seed sources (they are their own first energy state).
         for (coord, colour) in sources { energy[coord] = colour }
@@ -161,7 +170,12 @@ final class PuzzleSolver {
                     // Arriving at the outFace (backwards) silently drops the
                     // flow — the pipe goes dark rather than flagging a short,
                     // because the diode is topologically valid; it just blocks.
-                    if nTile.role.isDiode && side.opposite != nTile.diodeFaces.inFace { continue }
+                    // Record the coord so GameScene can fire a rejection pulse
+                    // (pedagogical signal — does not alter any flow logic).
+                    if nTile.role.isDiode && side.opposite != nTile.diodeFaces.inFace {
+                        blockedDiodes.insert(n)
+                        continue
+                    }
 
                     if nTile.role.isMixer {
                         // Accumulate into the mixer; mixers are handled
@@ -200,7 +214,10 @@ final class PuzzleSolver {
                     guard nTile.effectiveConnections.contains(side.opposite) else { continue }
 
                     // §5 Diode: mixer output obeys the same inFace rule.
-                    if nTile.role.isDiode && side.opposite != nTile.diodeFaces.inFace { continue }
+                    if nTile.role.isDiode && side.opposite != nTile.diodeFaces.inFace {
+                        blockedDiodes.insert(n)
+                        continue
+                    }
 
                     if nTile.role.isMixer {
                         let combined = EnergyColor.mix(energy[n] ?? .none, out)
@@ -274,7 +291,8 @@ final class PuzzleSolver {
             satisfiedSinks: satisfied,
             unsatisfiedSinks: unsatisfied,
             brokenTiles: broken,
-            shortedTiles: shorted
+            shortedTiles: shorted,
+            blockedDiodes: blockedDiodes
         )
     }
 }
