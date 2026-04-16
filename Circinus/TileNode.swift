@@ -195,6 +195,8 @@ final class TileNode: SKNode {
     private var highlightOverlay: SKShapeNode!
     private var pipeNodes: [SKNode] = []
     private var glowNode: SKEffectNode?
+    /// §6 Superposition: ghost pipe containers for the two quantum states.
+    private var ghostPipeNodes: [SKNode] = []
 
     /// The rotation that solves the puzzle (from JSON).
     var solutionRotation: Int = 0
@@ -287,7 +289,16 @@ final class TileNode: SKNode {
     // toB = true  → collapse to state B (rotationSteps + stored stateB offset)
     func collapseSuperposition(toB: Bool) {
         guard case .superposed(let a, let b, false, _) = role else { return }
-        role = .superposed(stateA: a, stateB: b, collapsed: true, pickedB: toB)
+        // Bake the chosen state's angular offset into rotationSteps so the
+        // canonical pipeNodes (rendered at rotationSteps) visually match the
+        // collapsed connections without needing any separate rotation animation.
+        let offset = toB ? b : a
+        rotationSteps = (rotationSteps + offset) % 4
+        zRotation = -CGFloat(rotationSteps) * .pi / 2
+        // Zero both stored offsets — they are now encoded in rotationSteps.
+        // effectiveConnections for collapsed state uses (chosen + rotationSteps)
+        // where chosen will be 0, giving connectionsAt(rotationSteps). ✓
+        role = .superposed(stateA: 0, stateB: 0, collapsed: true, pickedB: toB)
     }
 
     /// Connections this tile actually participates in after accounting for
@@ -585,20 +596,112 @@ final class TileNode: SKNode {
         if role.isDiode { refreshDiodePulse() }
     }
 
-    /// §5 Diode: refresh role-specific overlays after a role assignment.
-    /// Called by the `role.didSet` observer. Safe to call multiple times —
-    /// always removes the previous overlays before re-adding.
+    /// Refresh all role-specific overlays after a role assignment.
+    /// Called by the `role.didSet` observer. Safe to call multiple times.
     private func updateRoleVisuals() {
-        // Always clear previous diode overlays so a recycled tile doesn't
-        // carry stale visuals when its role is reset to .normal.
+        // Remove previous diode overlays and superposition ghosts.
         childNode(withName: "diodeArrow")?.removeFromParent()
         childNode(withName: "diodePulse")?.removeFromParent()
+        removeGhostPipes()
 
         if role.isDiode {
             addChild(buildDiodeArrow())
-            // Show the dim idle pulse immediately at role-assignment time so
-            // the direction is readable even before the first solver pass.
             refreshDiodePulse()
+        }
+
+        // §6 Superposition: two ghost overlays when uncollapsed.
+        if case .superposed(let a, let b, let collapsed, _) = role, !collapsed {
+            // Hide the main pipes — both ghost layers carry the visual instead.
+            for node in pipeNodes { node.alpha = 0.0 }
+            // Phase-offset the two pulses by 1 s (half of the 2 s cycle) so
+            // one ghost brightens as the other dims — the alternating signal
+            // that makes the "double-exposed" state unambiguous.
+            buildSuperposedGhost(stateOffset: a, phaseOffset: 0.0)
+            buildSuperposedGhost(stateOffset: b, phaseOffset: 1.0)
+        } else {
+            // Collapsed or any non-superposed role — restore main pipe alpha.
+            for node in pipeNodes { node.alpha = 1.0 }
+        }
+    }
+
+    private func removeGhostPipes() {
+        for ghost in ghostPipeNodes { ghost.removeFromParent() }
+        ghostPipeNodes.removeAll()
+    }
+
+    /// Build one ghost pipe layer for `stateOffset` rotations beyond the
+    /// tile's current `rotationSteps`. The ghost lives in local space; the
+    /// tile's own `zRotation` carries it to world space, so it automatically
+    /// advances with every player rotation (no special handling in rotate()).
+    private func buildSuperposedGhost(stateOffset: Int, phaseOffset: TimeInterval) {
+        guard tileType != .empty else { return }
+
+        let pipeW  = tileSize * 0.22
+        let halfT  = tileSize / 2
+        let armLen = halfT
+        let lavender = UIColor(red: 0.72, green: 0.60, blue: 1.0, alpha: 1)
+
+        let ghost = SKNode()
+        ghost.name      = "superposedGhost"
+        ghost.zPosition = 1.5
+        // Angular offset relative to the tile's own zRotation. Because the
+        // tile rotates as a unit, this offset is preserved on every CW step.
+        ghost.zRotation = -CGFloat(stateOffset) * .pi / 2
+
+        // Hub
+        let hub = SKShapeNode(circleOfRadius: pipeW * 0.72)
+        hub.fillColor   = lavender
+        hub.strokeColor = .clear
+        ghost.addChild(hub)
+
+        // Arms + caps for each canonical connection
+        for side in tileType.canonicalConnections {
+            let arm = SKShapeNode(rectOf: CGSize(width: pipeW, height: armLen),
+                                  cornerRadius: pipeW * 0.15)
+            arm.fillColor   = lavender
+            arm.strokeColor = .clear
+
+            let cap = SKShapeNode(circleOfRadius: pipeW * 0.52)
+            cap.fillColor   = lavender
+            cap.strokeColor = .clear
+
+            switch side {
+            case .top:
+                arm.position = CGPoint(x: 0, y: armLen / 2)
+                cap.position = CGPoint(x: 0, y: armLen)
+            case .bottom:
+                arm.position = CGPoint(x: 0, y: -armLen / 2)
+                cap.position = CGPoint(x: 0, y: -armLen)
+            case .right:
+                arm.position    = CGPoint(x: armLen / 2, y: 0)
+                arm.zRotation   = .pi / 2
+                cap.position    = CGPoint(x: armLen, y: 0)
+            case .left:
+                arm.position    = CGPoint(x: -armLen / 2, y: 0)
+                arm.zRotation   = .pi / 2
+                cap.position    = CGPoint(x: -armLen, y: 0)
+            }
+            ghost.addChild(arm)
+            ghost.addChild(cap)
+        }
+
+        ghost.alpha = 0.55
+        addChild(ghost)
+        ghostPipeNodes.append(ghost)
+
+        // Slow brightness oscillation (2 s cycle). phaseOffset staggers the
+        // two ghosts so they alternate rather than pulse in sync.
+        let pulse = SKAction.repeatForever(SKAction.sequence([
+            SKAction.fadeAlpha(to: 0.35, duration: 1.0),
+            SKAction.fadeAlpha(to: 0.70, duration: 1.0)
+        ]))
+        if phaseOffset > 0 {
+            ghost.run(SKAction.sequence([
+                SKAction.wait(forDuration: phaseOffset),
+                pulse
+            ]))
+        } else {
+            ghost.run(pulse)
         }
     }
 
@@ -978,8 +1081,13 @@ final class TileNode: SKNode {
         isAccessibilityElement = true
         accessibilityTraits = .button
         let connState = isConnected ? "connected" : "not connected"
-        accessibilityLabel = "\(tileType.rawValue) tile, rotation \(rotationSteps) of 4, \(connState)"
-        accessibilityHint = !isLocked ? "Double tap to rotate" : "Locked tile"
+        if case .superposed(_, _, let collapsed, _) = role, !collapsed {
+            accessibilityLabel = "\(tileType.rawValue) tile, superposed, double tap to rotate, long press to collapse, \(connState)"
+            accessibilityHint = "Long press to collapse to one state"
+        } else {
+            accessibilityLabel = "\(tileType.rawValue) tile, rotation \(rotationSteps) of 4, \(connState)"
+            accessibilityHint = !isLocked ? "Double tap to rotate" : "Locked tile"
+        }
     }
 
     // MARK: - Node recycling
@@ -1000,6 +1108,12 @@ final class TileNode: SKNode {
         // which removes the diode arrow and diodePulse overlays. crackOverlay
         // is separate (added by animateBreak, not role-driven) so it needs
         // its own explicit removal.
+        // §6 Superposition: remove ghost overlays and restore pipe alpha before
+        // setting role = .normal (which would also call updateRoleVisuals, but
+        // removeGhostPipes is idempotent so the double-call is safe).
+        removeGhostPipes()
+        for node in pipeNodes { node.alpha = 1.0 }
+
         role = .normal
         quantumGroup = nil
         rotationCount = 0

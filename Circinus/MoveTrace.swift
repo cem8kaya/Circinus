@@ -13,6 +13,8 @@ struct MoveEntry {
         case undo
         /// A quantum-group rotation (multiple tiles rotated atomically).
         case quantumRotate
+        /// A superposition collapse — player chose one of the two quantum states.
+        case collapseSuper
     }
 
     /// Whether this entry is a rotation, undo, or quantum rotation.

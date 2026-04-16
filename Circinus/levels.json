@@ -1297,6 +1297,68 @@
           }
         ]
       ]
+    },
+    {
+      "id": 11,
+      "name": "Schrödinger's Corner",
+      "gridCols": 3,
+      "gridRows": 3,
+      "tileSize": 95,
+      "par": 7,
+      "tiles": [
+        [
+          {
+            "type": "corner",
+            "rotation": 0,
+            "locked": false,
+            "role": "superposed:0:1"
+          },
+          {
+            "type": "straight",
+            "rotation": 1,
+            "locked": false
+          },
+          {
+            "type": "corner",
+            "rotation": 1,
+            "locked": false
+          }
+        ],
+        [
+          {
+            "type": "straight",
+            "rotation": 0,
+            "locked": false
+          },
+          {
+            "type": "empty",
+            "rotation": 0,
+            "locked": true
+          },
+          {
+            "type": "straight",
+            "rotation": 0,
+            "locked": false
+          }
+        ],
+        [
+          {
+            "type": "corner",
+            "rotation": 3,
+            "locked": false
+          },
+          {
+            "type": "straight",
+            "rotation": 1,
+            "locked": false
+          },
+          {
+            "type": "corner",
+            "rotation": 2,
+            "locked": false
+          }
+        ]
+      ]
     }
   ]
 }
