@@ -5,7 +5,7 @@ import UIKit
 
 protocol GameSceneDelegate: AnyObject {
     func gameScene(_ scene: GameScene, didCompleteLevel levelID: Int,
-                   moves: Int, stars: Int)
+                   moves: Int, stars: Int, trace: MoveTrace)
     func gameSceneDidRequestNextLevel(_ scene: GameScene, currentLevelID: Int)
     func gameSceneDidRequestRestart(_ scene: GameScene, levelID: Int)
     func gameSceneDidRequestMenu(_ scene: GameScene)
@@ -45,6 +45,7 @@ final class GameScene: SKScene {
 
     private var undoButton: SKNode!
     private var undoStack: [UndoEntry] = []
+    private let moveTrace = MoveTrace()
     private var hintButton: SKNode!
     private var hintCountLabel: SKLabelNode!
     private var hintsRemaining: Int = 3
@@ -343,6 +344,7 @@ final class GameScene: SKScene {
         self.moveCount = 0
         self.isSolved = false
         self.undoStack = []
+        self.moveTrace.reset()
         self.elapsedTime = 0
         self.lastUpdateTime = 0
         self.timerActive = true
@@ -710,18 +712,43 @@ final class GameScene: SKScene {
                                                    previousRotation: member.tile.rotationSteps,
                                                    undoGroupID: undoID))
                     }
+                    // Capture pre-rotation state for MoveTrace before animation starts.
+                    let traceCoords   = groupTiles.map { GridCoord(col: $0.col, row: $0.row) }
+                    let tracePrevRots = groupTiles.map { $0.tile.rotationSteps }
+                    let rotTimestamp  = CACurrentMediaTime()
                     TileNode.rotateQuantumGroup(groupTiles.map { $0.tile }) { [weak self] in
-                        self?.moveCount += 1
-                        self?.scheduleCompletionCheck()
+                        guard let self = self else { return }
+                        let traceAfterRots = groupTiles.map { $0.tile.rotationSteps }
+                        self.moveCount += 1
+                        self.moveTrace.append(MoveEntry(
+                            kind: .quantumRotate,
+                            coords: traceCoords,
+                            rotationBefore: tracePrevRots,
+                            rotationAfter: traceAfterRots,
+                            timestamp: rotTimestamp,
+                            moveIndex: self.moveCount
+                        ))
+                        self.scheduleCompletionCheck()
                     }
                 } else {
-                    let prevRot = tile.rotationSteps
+                    let prevRot      = tile.rotationSteps
+                    let traceCoord   = GridCoord(col: pressedCol, row: pressedRow)
+                    let rotTimestamp = CACurrentMediaTime()
                     undoStack.append(UndoEntry(row: pressedRow, col: pressedCol,
                                                previousRotation: prevRot,
                                                undoGroupID: UUID().uuidString))
                     tile.rotate { [weak self] in
-                        self?.moveCount += 1
-                        self?.scheduleCompletionCheck()
+                        guard let self = self else { return }
+                        self.moveCount += 1
+                        self.moveTrace.append(MoveEntry(
+                            kind: .rotate,
+                            coords: [traceCoord],
+                            rotationBefore: [prevRot],
+                            rotationAfter: [tile.rotationSteps],
+                            timestamp: rotTimestamp,
+                            moveIndex: self.moveCount
+                        ))
+                        self.scheduleCompletionCheck()
                     }
                 }
             }
@@ -1103,17 +1130,39 @@ final class GameScene: SKScene {
     private func performUndo() {
         guard !isSolved, let entry = undoStack.popLast() else { return }
 
-        // Apply first entry.
+        // Collect all tiles to revert (first entry + rest of its quantum group).
+        // We record before/after for the MoveTrace before touching any rotation.
+        struct UndoRecord { let coord: GridCoord; let before: Int; let after: Int }
+        var records: [UndoRecord] = []
+
+        let beforeFirst = tileGrid[entry.row][entry.col].rotationSteps
         tileGrid[entry.row][entry.col].setRotation(entry.previousRotation)
+        records.append(UndoRecord(coord: GridCoord(col: entry.col, row: entry.row),
+                                  before: beforeFirst,
+                                  after: entry.previousRotation))
 
         // §3 Quantum: pop the rest of the group atomically (they share the
         // same undoGroupID pushed by the quantum-group dispatch in touchesEnded).
         while let next = undoStack.last, next.undoGroupID == entry.undoGroupID {
             undoStack.removeLast()
+            let beforeNext = tileGrid[next.row][next.col].rotationSteps
             tileGrid[next.row][next.col].setRotation(next.previousRotation)
+            records.append(UndoRecord(coord: GridCoord(col: next.col, row: next.row),
+                                      before: beforeNext,
+                                      after: next.previousRotation))
         }
 
         moveCount = max(0, moveCount - 1)
+
+        moveTrace.append(MoveEntry(
+            kind: .undo,
+            coords: records.map { $0.coord },
+            rotationBefore: records.map { $0.before },
+            rotationAfter: records.map { $0.after },
+            timestamp: CACurrentMediaTime(),
+            moveIndex: moveCount
+        ))
+
         SoundManager.shared.playUndo()
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
@@ -1157,7 +1206,7 @@ final class GameScene: SKScene {
             let stars = calculateStars()
             triggerWinSequence(stars: stars)
             gameDelegate?.gameScene(self, didCompleteLevel: levelData.id,
-                                    moves: moveCount, stars: stars)
+                                    moves: moveCount, stars: stars, trace: moveTrace)
         }
     }
 
