@@ -51,6 +51,7 @@ enum TileType: String, Codable {
     case corner
     case tee
     case cross
+    case empty
 
     var canonicalConnections: Set<ConnectionSide> {
         switch self {
@@ -59,6 +60,7 @@ enum TileType: String, Codable {
         case .corner:   return [.top, .right]
         case .tee:      return [.top, .right, .bottom]
         case .cross:    return [.top, .right, .bottom, .left]
+        case .empty:    return []
         }
     }
 }
@@ -319,6 +321,24 @@ final class TileNode: SKNode {
         let pipeW = tileSize * 0.22
         let halfTile = tileSize / 2
         let cornerR: CGFloat = 10
+
+        if tileType == .empty {
+            // Invisible node to hold space but draw nothing.
+            // Still needed to populate `bgNode` for fallback refs although alpha is zero
+            bgNode = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: cornerR)
+            bgNode.alpha = 0
+            addChild(bgNode)
+
+            // Needs highlightOverlay and shadowNode internally for press states
+            highlightOverlay = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: cornerR)
+            highlightOverlay.alpha = 0
+            addChild(highlightOverlay)
+
+            shadowNode = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: cornerR)
+            shadowNode.alpha = 0
+            addChild(shadowNode)
+            return
+        }
 
         // Drop shadow
         shadowNode = SKShapeNode(rectOf: CGSize(width: tileSize - 3, height: tileSize - 3), cornerRadius: cornerR)

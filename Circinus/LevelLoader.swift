@@ -133,19 +133,19 @@ final class LevelLoader {
                 tileSize: 95,
                 tiles: [
                     [
-                        TileData(type: "corner",   rotation: 2, locked: false),
+                        TileData(type: "corner",   rotation: 1, locked: false),
                         TileData(type: "straight", rotation: 1, locked: false),
-                        TileData(type: "corner",   rotation: 3, locked: false)
+                        TileData(type: "corner",   rotation: 2, locked: false)
                     ],
                     [
                         TileData(type: "straight", rotation: 0, locked: false),
-                        TileData(type: "cross",    rotation: 0, locked: true),
+                        TileData(type: "empty",    rotation: 0, locked: true),
                         TileData(type: "straight", rotation: 0, locked: false)
                     ],
                     [
-                        TileData(type: "corner",   rotation: 1, locked: false),
+                        TileData(type: "corner",   rotation: 0, locked: false),
                         TileData(type: "straight", rotation: 1, locked: false),
-                        TileData(type: "corner",   rotation: 0, locked: false)
+                        TileData(type: "corner",   rotation: 3, locked: false)
                     ]
                 ],
                 par: 6
@@ -158,10 +158,10 @@ final class LevelLoader {
                 tileSize: 82,
                 tiles: [
                     [
-                        TileData(type: "corner", rotation: 2, locked: false),
-                        TileData(type: "tee",    rotation: 3, locked: false),
-                        TileData(type: "tee",    rotation: 3, locked: false),
-                        TileData(type: "corner", rotation: 3, locked: false)
+                        TileData(type: "corner", rotation: 1, locked: false),
+                        TileData(type: "tee",    rotation: 1, locked: false),
+                        TileData(type: "tee",    rotation: 1, locked: false),
+                        TileData(type: "corner", rotation: 2, locked: false)
                     ],
                     [
                         TileData(type: "tee",   rotation: 0, locked: false),
@@ -176,10 +176,10 @@ final class LevelLoader {
                         TileData(type: "tee",   rotation: 2, locked: false)
                     ],
                     [
-                        TileData(type: "corner", rotation: 1, locked: false),
-                        TileData(type: "tee",    rotation: 1, locked: false),
-                        TileData(type: "tee",    rotation: 1, locked: false),
-                        TileData(type: "corner", rotation: 0, locked: false)
+                        TileData(type: "corner", rotation: 0, locked: false),
+                        TileData(type: "tee",    rotation: 3, locked: false),
+                        TileData(type: "tee",    rotation: 3, locked: false),
+                        TileData(type: "corner", rotation: 3, locked: false)
                     ]
                 ],
                 par: 10

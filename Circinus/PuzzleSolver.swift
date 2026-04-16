@@ -69,6 +69,7 @@ final class PuzzleSolver {
         var leaky   = Set<GridCoord>()
         var paired  = Set<GridCoord>()
         var broken  = Set<GridCoord>()
+        var emptyNodes = Set<GridCoord>()
         var sources = [(GridCoord, EnergyColor)]()
         var sinks   = [(GridCoord, ConnectionSide, EnergyColor)]()
 
@@ -76,6 +77,11 @@ final class PuzzleSolver {
             for col in 0..<cols {
                 let coord = GridCoord(col: col, row: row)
                 let tile  = grid[row][col]
+
+                if tile.tileType == .empty {
+                    emptyNodes.insert(coord)
+                    continue
+                }
 
                 if tile.isBroken {
                     broken.insert(coord)
@@ -254,7 +260,7 @@ final class PuzzleSolver {
             guard leaky.isEmpty, shorted.isEmpty else { return false }
             if sinks.isEmpty {
                 // Legacy rule: every tile on a single connected loop.
-                return connected.count == cols * rows - broken.count
+                return connected.count == cols * rows - broken.count - emptyNodes.count
             }
             // New rule: all sinks satisfied.
             return unsatisfied.isEmpty && !sinks.isEmpty
