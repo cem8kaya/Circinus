@@ -17,6 +17,8 @@ private struct UndoEntry {
     let row: Int
     let col: Int
     let previousRotation: Int
+    /// Non-nil only for collapse moves; restores the pre-collapse superposed role on undo.
+    let previousRole: TileRole?
     /// §3 Quantum: entries sharing the same undoGroupID are reversed together
     /// as a single undo action. Plain moves get a unique UUID per tap.
     let undoGroupID: String
@@ -93,6 +95,12 @@ final class GameScene: SKScene {
 
     private var solverWorkItem: DispatchWorkItem?
 
+    // §6 Superposition long-press collapse
+    private var longPressStart: TimeInterval?
+    private var collapseOverlay: SKNode?
+    private var collapseTargetRow: Int = -1
+    private var collapseTargetCol: Int = -1
+
     // MARK: - Scene setup
 
     override func didMove(to view: SKView) {
@@ -114,6 +122,16 @@ final class GameScene: SKScene {
             updateTimerDisplay()
         }
         lastUpdateTime = currentTime
+
+        // §6 Long-press: fire collapse overlay after 0.45 s on a superposed tile.
+        if let start = longPressStart,
+           let tile = pressedTile,
+           !tile.isLocked,
+           CACurrentMediaTime() - start > 0.45,
+           case .superposed(_, _, false, _) = tile.role {
+            showCollapseOverlay(for: tile, row: pressedRow, col: pressedCol)
+            longPressStart = nil   // consumed — don't re-fire
+        }
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -361,6 +379,11 @@ final class GameScene: SKScene {
         self.dimOverlayNode = nil
         self.confirmOverlay?.removeFromParent()
         self.confirmOverlay = nil
+        self.collapseOverlay?.removeFromParent()
+        self.collapseOverlay   = nil
+        self.collapseTargetRow = -1
+        self.collapseTargetCol = -1
+        self.longPressStart    = nil
 
         // Store solution rotations from JSON
         solutionRotations = levelData.tiles.map { row in row.map { $0.rotation } }
@@ -615,6 +638,18 @@ final class GameScene: SKScene {
             return
         }
 
+        // §6 Collapse overlay: intercept all input while visible.
+        if collapseOverlay != nil {
+            let sceneLoc2 = touch.location(in: self)
+            for node in nodes(at: sceneLoc2) {
+                let name = node.name ?? node.parent?.name
+                if name == "collapseA" { handleCollapseChoice(toB: false); return }
+                if name == "collapseB" { handleCollapseChoice(toB: true);  return }
+            }
+            dismissCollapseOverlay()
+            return
+        }
+
         // Check HUD buttons first (in scene coords)
         let sceneLoc = touch.location(in: self)
         let tappedNodes = nodes(at: sceneLoc)
@@ -687,6 +722,10 @@ final class GameScene: SKScene {
                     pressedRow = row
                     pressedCol = col
                     tile.applyPressState()
+                    // §6 Start long-press timer for uncollapsed superposed tiles.
+                    if case .superposed(_, _, false, _) = tile.role {
+                        longPressStart = CACurrentMediaTime()
+                    }
                     return
                 }
             }
@@ -694,6 +733,7 @@ final class GameScene: SKScene {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        longPressStart = nil
         guard let tile = pressedTile else { return }
         tile.releasePressState()
 
@@ -720,6 +760,7 @@ final class GameScene: SKScene {
                     for member in groupTiles {
                         undoStack.append(UndoEntry(row: member.row, col: member.col,
                                                    previousRotation: member.tile.rotationSteps,
+                                                   previousRole: nil,
                                                    undoGroupID: undoID))
                     }
                     // Capture pre-rotation state for MoveTrace before animation starts.
@@ -746,6 +787,7 @@ final class GameScene: SKScene {
                     let rotTimestamp = CACurrentMediaTime()
                     undoStack.append(UndoEntry(row: pressedRow, col: pressedCol,
                                                previousRotation: prevRot,
+                                               previousRole: nil,
                                                undoGroupID: UUID().uuidString))
                     tile.rotate { [weak self] in
                         guard let self = self else { return }
@@ -770,6 +812,7 @@ final class GameScene: SKScene {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        longPressStart = nil
         pressedTile?.releasePressState()
         pressedTile = nil
         pressedRow = -1
@@ -981,6 +1024,133 @@ final class GameScene: SKScene {
         hintSpotlightNode = nil
     }
 
+    // MARK: - §6 Collapse overlay
+
+    private func showCollapseOverlay(for tile: TileNode, row: Int, col: Int) {
+        dismissCollapseOverlay()
+        // Cancel press state — touchesEnded must not fire a rotation.
+        tile.releasePressState()
+        pressedTile = nil
+
+        collapseTargetRow = row
+        collapseTargetCol = col
+
+        let worldPos  = convert(tile.position, from: gridContainer)
+        let panelW: CGFloat = 188
+        let panelH: CGFloat = 78
+
+        var panelX = worldPos.x
+        var panelY = worldPos.y + tile.tileSize / 2 + panelH / 2 + 14
+        panelX = max(panelW / 2 + 10, min(size.width  - panelW / 2 - 10, panelX))
+        panelY = max(panelH / 2 + 10, min(size.height - panelH / 2 - 10, panelY))
+
+        let overlay = SKNode()
+        overlay.zPosition = 120
+        overlay.name = "collapseOverlay"
+
+        // Invisible tap-catcher so any tap outside the panel dismisses it.
+        let catcher = SKShapeNode(rectOf: CGSize(width: size.width * 2, height: size.height * 2))
+        catcher.fillColor   = .clear
+        catcher.strokeColor = .clear
+        catcher.position    = CGPoint(x: size.width / 2, y: size.height / 2)
+        catcher.name        = "collapseCancel"
+        overlay.addChild(catcher)
+
+        let panel = SKShapeNode(rectOf: CGSize(width: panelW, height: panelH), cornerRadius: 14)
+        panel.fillColor   = UIColor(red: 0.10, green: 0.11, blue: 0.16, alpha: 0.97)
+        panel.strokeColor = UIColor(red: 0.72, green: 0.60, blue: 1.0, alpha: 0.55)
+        panel.lineWidth   = 1.5
+        panel.position    = CGPoint(x: panelX, y: panelY)
+        overlay.addChild(panel)
+
+        let label = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+        label.text = "Collapse to:"
+        label.fontSize = 12
+        label.fontColor = UIColor(white: 0.65, alpha: 1)
+        label.horizontalAlignmentMode = .center
+        label.verticalAlignmentMode   = .center
+        label.position = CGPoint(x: panelX, y: panelY + 18)
+        overlay.addChild(label)
+
+        let btnA = makeActionButton(text: "State A", width: 76, height: 28,
+                                    color: UIColor(red: 0.50, green: 0.30, blue: 0.95, alpha: 0.90),
+                                    textColor: .white, name: "collapseA")
+        btnA.position = CGPoint(x: panelX - 46, y: panelY - 14)
+        overlay.addChild(btnA)
+
+        let btnB = makeActionButton(text: "State B", width: 76, height: 28,
+                                    color: UIColor(red: 0.25, green: 0.50, blue: 0.95, alpha: 0.90),
+                                    textColor: .white, name: "collapseB")
+        btnB.position = CGPoint(x: panelX + 46, y: panelY - 14)
+        overlay.addChild(btnB)
+
+        overlay.alpha = 0
+        overlay.setScale(0.85)
+        addChild(overlay)
+        collapseOverlay = overlay
+
+        overlay.run(SKAction.group([
+            SKAction.fadeIn(withDuration: 0.14),
+            SKAction.scale(to: 1.0, duration: 0.14)
+        ]))
+
+        SoundManager.shared.playButtonTap()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    private func dismissCollapseOverlay() {
+        collapseOverlay?.removeFromParent()
+        collapseOverlay    = nil
+        collapseTargetRow  = -1
+        collapseTargetCol  = -1
+    }
+
+    private func handleCollapseChoice(toB: Bool) {
+        let row = collapseTargetRow
+        let col = collapseTargetCol
+        dismissCollapseOverlay()
+
+        guard row >= 0, col >= 0,
+              row < tileGrid.count, col < tileGrid[row].count else { return }
+        let tile = tileGrid[row][col]
+        guard case .superposed(_, _, false, _) = tile.role else { return }
+
+        let prevRole = tile.role
+        let prevRot  = tile.rotationSteps
+
+        tile.collapseSuperposition(toB: toB)
+
+        // Snap animation — tile visibly "decides" its state.
+        let snapUp   = SKAction.scale(to: 1.08, duration: 0.07)
+        let snapDown = SKAction.scale(to: 1.00, duration: 0.07)
+        tile.run(SKAction.sequence([snapUp, snapDown]))
+        tile.run(SKAction.sequence([
+            SKAction.fadeAlpha(to: 0.65, duration: 0.04),
+            SKAction.fadeAlpha(to: 1.00, duration: 0.12)
+        ]))
+        SoundManager.shared.playRotate()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        // Push undo — stores the pre-collapse role so performUndo can
+        // return the tile to uncollapsed state with ghosts intact.
+        undoStack.append(UndoEntry(row: row, col: col,
+                                   previousRotation: prevRot,
+                                   previousRole: prevRole,
+                                   undoGroupID: UUID().uuidString))
+
+        moveCount += 1
+        moveTrace.append(MoveEntry(
+            kind: .collapseSuper,
+            coords: [GridCoord(col: col, row: row)],
+            rotationBefore: [prevRot],
+            rotationAfter: [tile.rotationSteps],
+            timestamp: CACurrentMediaTime(),
+            moveIndex: moveCount
+        ))
+
+        scheduleCompletionCheck()
+    }
+
     // MARK: - Toast notification
 
     private func showToast(_ message: String) {
@@ -1151,6 +1321,12 @@ final class GameScene: SKScene {
 
         let beforeFirst = tileGrid[entry.row][entry.col].rotationSteps
         tileGrid[entry.row][entry.col].setRotation(entry.previousRotation)
+        // §6 Collapse undo: restoring the role puts the tile back into the
+        // uncollapsed superposed state, which re-triggers updateRoleVisuals()
+        // and rebuilds the ghost overlays automatically.
+        if let prevRole = entry.previousRole {
+            tileGrid[entry.row][entry.col].role = prevRole
+        }
         records.append(UndoRecord(coord: GridCoord(col: entry.col, row: entry.row),
                                   before: beforeFirst,
                                   after: entry.previousRotation))
@@ -1161,6 +1337,9 @@ final class GameScene: SKScene {
             undoStack.removeLast()
             let beforeNext = tileGrid[next.row][next.col].rotationSteps
             tileGrid[next.row][next.col].setRotation(next.previousRotation)
+            if let prevRole = next.previousRole {
+                tileGrid[next.row][next.col].role = prevRole
+            }
             records.append(UndoRecord(coord: GridCoord(col: next.col, row: next.row),
                                       before: beforeNext,
                                       after: next.previousRotation))
