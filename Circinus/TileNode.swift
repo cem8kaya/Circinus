@@ -528,18 +528,28 @@ final class TileNode: SKNode {
                 shape.fillColor = target
             }
         }
+
+        // §5 Diode: keep the directional flow pulse in sync with the live
+        // energy state. Pulse speed/colour shift between idle and active so
+        // the blocked-vs-conducting distinction is visually unambiguous —
+        // no GameScene wiring required.
+        if role.isDiode { refreshDiodePulse() }
     }
 
     /// §5 Diode: refresh role-specific overlays after a role assignment.
     /// Called by the `role.didSet` observer. Safe to call multiple times —
-    /// always removes the previous overlay before re-adding.
+    /// always removes the previous overlays before re-adding.
     private func updateRoleVisuals() {
-        // Always clear the previous diode arrow so a recycled tile doesn't
+        // Always clear previous diode overlays so a recycled tile doesn't
         // carry stale visuals when its role is reset to .normal.
         childNode(withName: "diodeArrow")?.removeFromParent()
+        childNode(withName: "diodePulse")?.removeFromParent()
 
         if role.isDiode {
             addChild(buildDiodeArrow())
+            // Show the dim idle pulse immediately at role-assignment time so
+            // the direction is readable even before the first solver pass.
+            refreshDiodePulse()
         }
     }
 
@@ -587,6 +597,101 @@ final class TileNode: SKNode {
         return container
     }
 
+    /// §5 Diode — visual ambiguity fix: directional flow pulse.
+    ///
+    /// Replaces (or removes) the "diodePulse" child node to reflect the
+    /// current `currentEnergy` state. Always removes the old node first so
+    /// the method is safe to call on every energy-state transition.
+    ///
+    /// **Why motion beats a static arrow (Gestalt §5 fix):**
+    /// Gestalt's Law of Prägnanz makes the brain lock onto the dominant
+    /// "straight pipe" interpretation before examining overlays. A moving
+    /// dot is *preattentive* — processed before form — so it bypasses that
+    /// suppression entirely. The dot travels from in-face → out-face in
+    /// *local* space (bottom→top at rotation 0). The tile's own `zRotation`
+    /// carries the animation into world space, so no recomputation is needed
+    /// on each rotation step.
+    ///
+    /// **Dark-board degradation:** when `currentEnergy == .none` the pulse
+    /// runs at α=0.28, dim but visible, satisfying design rule §3
+    /// (every hidden state has a visual tell).
+    ///
+    /// **Colour-blind safety:** the signal is entirely shape + motion.
+    /// The dot's tint mirrors the pipe colour but is redundant — direction
+    /// is encoded purely by movement, not hue.
+    ///
+    /// **ReduceMotion respect:** when the system accessibility flag is set,
+    /// the dot is placed statically at mid-travel so direction is still
+    /// legible without animation.
+    private func refreshDiodePulse() {
+        // Always remove the previous pulse node first so a role change or
+        // isBroken transition leaves the tile clean.
+        childNode(withName: "diodePulse")?.removeFromParent()
+        guard role.isDiode, !isBroken else { return }
+
+        // Pulse parameters shift between idle (dark) and active (energised)
+        // states so the visual difference is immediately readable.
+        let pulseColor: UIColor
+        let baseAlpha:  CGFloat
+        let cycleDur:   TimeInterval
+        if currentEnergy != .none {
+            pulseColor = currentEnergy.uiColor
+            baseAlpha  = 0.85
+            cycleDur   = 0.55   // faster when live — reinforces active flow
+        } else {
+            pulseColor = UIColor(white: 1.0, alpha: 1)
+            baseAlpha  = 0.28
+            cycleDur   = 1.05   // slow idle pulse — readable, not distracting
+        }
+
+        let container = SKNode()
+        container.name      = "diodePulse"
+        container.zPosition = 3.5   // between arrow (z 3) and highlight (z 5)
+
+        let dotRadius: CGFloat = tileSize * 0.055
+        let dot = SKShapeNode(circleOfRadius: dotRadius)
+        dot.fillColor   = pulseColor.withAlphaComponent(baseAlpha)
+        dot.strokeColor = .clear
+        container.addChild(dot)
+
+        // Travel path in local space: just below the hub → near the arm tip.
+        // Proportional offsets stay within the pipe channel at all tile sizes
+        // used in levels.json (50 pt … 95 pt).
+        let startY: CGFloat = -(tileSize * 0.10)   // just below hub
+        let endY:   CGFloat =   tileSize * 0.38    // near out-face arm tip
+        let travel  = endY - startY
+
+        dot.position = CGPoint(x: 0, y: startY)
+        dot.alpha    = 0
+
+        // Respect system-level reduce-motion preference: place the dot
+        // statically at mid-travel so direction remains legible without
+        // requiring motion perception.
+        if UIAccessibility.isReduceMotionEnabled {
+            dot.position = CGPoint(x: 0, y: startY + travel * 0.5)
+            dot.alpha    = baseAlpha * 0.75
+            addChild(container)
+            return
+        }
+
+        // Animate: fade in as dot leaves hub, fade out as it nears the tip.
+        let fadeSeq = SKAction.sequence([
+            SKAction.fadeAlpha(to: baseAlpha, duration: cycleDur * 0.20),
+            SKAction.fadeAlpha(to: baseAlpha, duration: cycleDur * 0.55),
+            SKAction.fadeAlpha(to: 0,         duration: cycleDur * 0.25)
+        ])
+        let moveUp  = SKAction.moveBy(x: 0, y: travel, duration: cycleDur)
+        let animate = SKAction.group([moveUp, fadeSeq])
+        // [weak dot] breaks the retain cycle: dot → action closure → dot.
+        let reset   = SKAction.run { [weak dot] in
+            dot?.position = CGPoint(x: 0, y: startY)
+            dot?.alpha    = 0
+        }
+        dot.run(SKAction.repeatForever(SKAction.sequence([animate, reset])))
+
+        addChild(container)
+    }
+
     /// Shatter feedback for fragile tiles that exceeded their rotation
     /// budget. Pipes dim, a crack overlay appears, haptic thumps, and the
     /// tile stops accepting input (guarded by `isBroken` in `rotate`).
@@ -594,6 +699,10 @@ final class TileNode: SKNode {
         SoundManager.shared.playRotate()  // reuse until a dedicated SFX ships
         let heavy = UIImpactFeedbackGenerator(style: .heavy)
         heavy.impactOccurred()
+
+        // §5+§4 future composition (fragile diode): kill the flow pulse
+        // immediately so the shattered state reads cleanly.
+        childNode(withName: "diodePulse")?.removeFromParent()
 
         // Dim pipes to a muted grey.
         let dead = UIColor(white: 0.28, alpha: 1)
@@ -700,6 +809,64 @@ final class TileNode: SKNode {
         }
     }
 
+    /// §5 Diode — pedagogical rejection pulse.
+    ///
+    /// Fired by GameScene when the solver records this diode in
+    /// `SolveResult.blockedDiodes` (energy arrived at the outFace and was
+    /// dropped). Three simultaneous signals:
+    ///
+    ///   1. Amber border flash — colour-coded warning on the tile perimeter.
+    ///   2. Expanding burst ring at the canonical inFace tip (local y = −halfTile).
+    ///      Because the animation lives in *local* space, `zRotation` carries
+    ///      it to the correct world-space entry face automatically.
+    ///   3. bgNode scale clench — tactile "blocked by a barrier" feel without
+    ///      shifting the tile's grid position.
+    ///
+    /// One-shot (no repeat). Safe to call repeatedly — each call is
+    /// independent (uses withKey to cancel any in-flight instance).
+    func showRejectionPulse() {
+        guard role.isDiode, !isBroken else { return }
+
+        let amber = UIColor(red: 1.0, green: 0.55, blue: 0.10, alpha: 1)
+
+        // 1. Amber border flash on bgNode stroke.
+        let flashIn  = SKAction.customAction(withDuration: 0.20) { [weak self] _, elapsed in
+            guard let self = self else { return }
+            let t = CGFloat(elapsed / 0.20)
+            self.bgNode.strokeColor = TileNode.colorBGStroke.lerp(to: amber, t: t)
+        }
+        let flashOut = SKAction.customAction(withDuration: 0.30) { [weak self] _, elapsed in
+            guard let self = self else { return }
+            let t = CGFloat(elapsed / 0.30)
+            self.bgNode.strokeColor = amber.lerp(to: TileNode.colorBGStroke, t: t)
+        }
+        bgNode.run(SKAction.sequence([flashIn, flashOut]), withKey: "rejectionBorder")
+
+        // 2. Expanding ring at the canonical inFace tip (local-space y = −halfTile).
+        //    The ring stays in local space; zRotation maps it to world-space inFace.
+        let ring = SKShapeNode(circleOfRadius: tileSize * 0.10)
+        ring.fillColor   = .clear
+        ring.strokeColor = amber.withAlphaComponent(0.85)
+        ring.lineWidth   = 1.8
+        ring.position    = CGPoint(x: 0, y: -tileSize / 2)
+        ring.zPosition   = 6
+        ring.name        = "rejectionRing"
+        addChild(ring)
+
+        let expand = SKAction.scale(to: 2.4, duration: 0.38)
+        expand.timingMode = .easeOut
+        ring.run(SKAction.group([expand, SKAction.fadeOut(withDuration: 0.38)])) {
+            ring.removeFromParent()
+        }
+
+        // 3. bgNode scale clench: tile briefly "resists" the blocked energy.
+        bgNode.run(SKAction.sequence([
+            SKAction.scale(to: 0.95, duration: 0.06),
+            SKAction.scale(to: 1.03, duration: 0.06),
+            SKAction.scale(to: 1.00, duration: 0.05)
+        ]), withKey: "rejectionClench")
+    }
+
     // MARK: - Connection animation
 
     private func animateConnectionChange() {
@@ -781,8 +948,9 @@ final class TileNode: SKNode {
 
         // Reset new mechanic state (§1–§5).
         // Note: setting role = .normal triggers updateRoleVisuals() via didSet,
-        // which removes the diode arrow. crackOverlay is separate (added by
-        // animateBreak, not role-driven) so it needs its own explicit removal.
+        // which removes the diode arrow and diodePulse overlays. crackOverlay
+        // is separate (added by animateBreak, not role-driven) so it needs
+        // its own explicit removal.
         role = .normal
         quantumGroup = nil
         rotationCount = 0
